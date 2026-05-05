@@ -10,7 +10,7 @@
 
 1. [Background — Why This Demo Exists](#1-background)
 2. [Prerequisites](#2-prerequisites)
-3. [Build the Application Image](#3-build-the-application-image)
+3. [Application Image](#3-application-image)
 4. [Create the Cluster](#4-create-the-cluster)
 5. [Implementation 1 — Sidecar](#5-implementation-1--sidecar)
 6. [Implementation 2 — Deployment](#6-implementation-2--deployment)
@@ -381,8 +381,8 @@ The key difference from all previous implementations: it is **event-driven, not 
 
 ### Prerequisites
 
-- `docker` available on the host (needed to build the operator image)
 - The kind cluster must be running
+- `docker` is only needed for the local build fallback (`make deploy-local`) — the primary path pulls the image from GHCR automatically
 
 ### The CRD — `StartupBoostPolicy`
 
