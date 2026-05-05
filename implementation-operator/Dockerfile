@@ -1,5 +1,9 @@
 # ── Stage 1: build ────────────────────────────────────────────────────────────
-FROM golang:1.23-alpine AS builder
+# BUILDPLATFORM is the CI runner's native platform (always amd64 on GitHub Actions).
+# Running the builder stage natively and cross-compiling via GOARCH is ~10x faster
+# than QEMU emulation. The ARG default makes legacy `docker build` work unchanged.
+ARG BUILDPLATFORM=linux/amd64
+FROM --platform=${BUILDPLATFORM} golang:1.23-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64

@@ -2,6 +2,7 @@ LOCAL_IMAGE ?= startup-boost-operator:local
 REMOTE_IMAGE ?= ghcr.io/graz-dev/startup-boost-operator:latest
 CLUSTER   ?= cpu-burst-lab
 NAMESPACE ?= cpu-burst-demo
+GOARCH    := $(shell uname -m | sed 's/x86_64/amd64/;s/arm64/arm64/')
 
 .PHONY: help deps build test docker-build kind-load publish deploy deploy-local undeploy
 
@@ -18,7 +19,7 @@ test: ## Run unit tests
 	go test ./... -v
 
 docker-build: ## Build the container image (local tag)
-	docker build -t $(LOCAL_IMAGE) .
+	docker build --build-arg TARGETARCH=$(GOARCH) -t $(LOCAL_IMAGE) .
 
 kind-load: docker-build ## Build and load the local image into the kind cluster
 	kind load docker-image $(LOCAL_IMAGE) --name $(CLUSTER)
