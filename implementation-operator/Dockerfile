@@ -1,6 +1,9 @@
 # ── Stage 1: build ────────────────────────────────────────────────────────────
 FROM golang:1.23-alpine AS builder
 
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
 WORKDIR /workspace
 
 # Copy module definition first, then source — so dependency resolution
@@ -14,8 +17,8 @@ COPY internal/ internal/
 # a pre-generated go.sum file in the repository.
 RUN GONOSUMDB='*' GOFLAGS='-mod=mod' go mod download
 
-# Static binary — no CGO, no libc dependency in the final image.
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS='-mod=mod' \
+# Static binary — TARGETOS/TARGETARCH are set by Docker Buildx for each platform.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOFLAGS='-mod=mod' \
     go build -a -ldflags="-s -w" -o manager ./cmd/main.go
 
 # ── Stage 2: minimal runtime image ────────────────────────────────────────────

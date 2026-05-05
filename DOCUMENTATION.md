@@ -1,7 +1,7 @@
 # Demo Lab — Detailed Documentation
 
 > **Talk**: "Stop Overprovisioning for Application Startup"
-> **Topic**: Kubernetes In-Place Pod Vertical Scaling (KEP-1287, GA in v1.33)
+> **Topic**: Kubernetes In-Place Pod Vertical Scaling (KEP-1287, GA in v1.35)
 > **Goal**: Show four concrete ways to give a JVM its CPU burst at startup, then reclaim it without restarting the container.
 
 ---
@@ -61,7 +61,7 @@ CPU usage
 
 ### The In-Place Resize Solution
 
-Kubernetes In-Place Pod Vertical Scaling (KEP-1287, **GA in v1.33**) lets you change a running pod's `resources.requests` and `resources.limits` **without restarting the container**. The kubelet updates the cgroup limits on the running process.
+Kubernetes In-Place Pod Resize lets you change a running pod's `resources.requests` and `resources.limits` **without restarting the container**. The kubelet updates the cgroup limits on the running process.
 
 The pattern:
 1. Pod starts with **burst resources** (e.g. `cpu: 1500m`)
@@ -418,32 +418,46 @@ The controller watches for pods matching `selector` in the same namespace. As so
 
 The operator image is published to GHCR by CI — no local Docker build needed.
 
+The install is split into two distinct steps, which mirrors how real operators are used in practice:
+
+**Step 1 — Install the operator** (CRD + RBAC + controller + app deployment):
+
 ```bash
 # Clean up any previous implementation first
 kubectl delete namespace cpu-burst-demo --ignore-not-found
 
-cd implementation-operator
-
-# Register the CRD, wait for the API server to accept it, then apply everything
-make deploy
+kubectl apply --server-side -k implementation-operator/
 ```
 
-Which expands to:
+Server-side apply handles the CRD + other resources in a single command without a race condition because the `StartupBoostPolicy` CR instance is not bundled into the kustomization — only the CRD schema itself is. The controller starts up and waits for its informer cache to sync.
+
+**Step 2 — Create a `StartupBoostPolicy`** (this is what an app team would do):
 
 ```bash
-kubectl apply -f config/namespace.yaml
-kubectl apply -f config/crd/startup.boost.io_startupboostpolicies.yaml
-kubectl wait --for=condition=Established \
-  crd/startupboostpolicies.startup.boost.io --timeout=30s
-kubectl apply -k .   # pulls ghcr.io/graz-dev/startup-boost-operator:latest
+kubectl apply -f implementation-operator/config/samples/startupboostpolicy.yaml
 ```
 
-> **Why the two-step CRD apply?** The CRD must be registered (condition `Established`) before you can create instances of it. Applying the full kustomization in one shot errors with `no matches for kind "StartupBoostPolicy"` because the API server hasn't registered the new type yet. `make deploy` handles this automatically.
+This creates the `petclinic-boost` policy that tells the operator to resize pods matching `app.kubernetes.io/name=petclinic` down to `300m` CPU once they become Ready.
 
-### Verify the CRD and policy are registered
+> This separation reflects real operator usage: a platform team installs the operator once (step 1); application teams create policy objects for their workloads (step 2). Bundling the CR instance into the operator installation would couple infrastructure to application configuration.
+
+> **First time / no GHCR image yet?** If you have not pushed the repo yet (so the CI workflow has not published the image), use the local build path instead:
+> ```bash
+> cd implementation-operator && make deploy-local
+> kubectl apply -f config/samples/startupboostpolicy.yaml
+> ```
+> This builds the image with Docker, loads it into kind, and patches `imagePullPolicy: Never` automatically.
+
+### Verify the operator is running
 
 ```bash
+# CRD is registered
 kubectl get crd startupboostpolicies.startup.boost.io
+
+# Operator pod is up
+kubectl get pods -n cpu-burst-demo -l app.kubernetes.io/name=startup-boost-operator
+
+# Policy instance is active (after step 2)
 kubectl get sbp -n cpu-burst-demo
 # NAME              SELECTOR                                  STEADYCPU   AGE
 # petclinic-boost   {"app.kubernetes.io/name":"petclinic"}    300m        5s
@@ -520,12 +534,8 @@ kubectl get $POD -n cpu-burst-demo \
 ### Cleanup
 
 ```bash
-# From implementation-operator/ directory
-make undeploy
-
-# Or from the repo root
-kubectl delete namespace cpu-burst-demo
-kubectl delete crd startupboostpolicies.startup.boost.io
+kubectl delete namespace cpu-burst-demo --ignore-not-found
+kubectl delete crd startupboostpolicies.startup.boost.io --ignore-not-found
 ```
 
 ---
@@ -539,9 +549,10 @@ Each implementation uses the same `cpu-burst-demo` namespace. Deleting it betwee
 kubectl delete namespace cpu-burst-demo
 
 # Apply the next one
-kubectl apply -k implementation-sidecar/    # or deployment / vpa
-# For the CRD operator (requires docker build):
-# cd implementation-operator && make deploy
+kubectl apply -k implementation-sidecar/          # or deployment / vpa
+# For the operator (two steps):
+# kubectl apply --server-side -k implementation-operator/
+# kubectl apply -f implementation-operator/config/samples/startupboostpolicy.yaml
 ```
 
 **What survives the namespace delete:**

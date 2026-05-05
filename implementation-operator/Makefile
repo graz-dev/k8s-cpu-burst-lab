@@ -29,29 +29,23 @@ publish: ## Build and push to GHCR (requires: docker login ghcr.io)
 	docker push $(REMOTE_IMAGE)
 	@echo "✅  Image pushed: $(REMOTE_IMAGE)"
 
-deploy: ## Apply CRD + manifests using the public GHCR image (no local build needed)
-	kubectl apply -f config/namespace.yaml
-	kubectl apply -f config/crd/startup.boost.io_startupboostpolicies.yaml
-	kubectl wait --for=condition=Established crd/startupboostpolicies.startup.boost.io --timeout=30s
-	kubectl apply -k .
+deploy: ## Install operator (CRD + RBAC + controller + app) using the public GHCR image
+	kubectl apply --server-side -k .
 	@echo ""
-	@echo "✅  Operator deployed. Watch it:"
-	@echo "    kubectl logs -n $(NAMESPACE) -l app.kubernetes.io/name=startup-boost-operator -f"
+	@echo "✅  Operator installed. Now create a StartupBoostPolicy:"
+	@echo "    kubectl apply -f config/samples/startupboostpolicy.yaml"
 	@echo ""
 	@echo "    kubectl get sbp -n $(NAMESPACE)"
-	@echo "    kubectl describe sbp petclinic-boost -n $(NAMESPACE)"
-
-deploy-local: kind-load ## Build locally, load into kind, then apply (offline / dev use)
-	kubectl apply -f config/namespace.yaml
-	kubectl apply -f config/crd/startup.boost.io_startupboostpolicies.yaml
-	kubectl wait --for=condition=Established crd/startupboostpolicies.startup.boost.io --timeout=30s
-	@# Override the image to the locally loaded tag
-	kubectl apply -k . --dry-run=client -o yaml \
-	  | sed 's|ghcr.io/graz-dev/startup-boost-operator:latest|$(LOCAL_IMAGE)|g' \
-	  | kubectl apply -f -
-	@echo ""
-	@echo "✅  Operator deployed (local image). Watch it:"
 	@echo "    kubectl logs -n $(NAMESPACE) -l app.kubernetes.io/name=startup-boost-operator -f"
+
+deploy-local: kind-load ## Build locally, load into kind, then install (offline / dev use)
+	kubectl apply --server-side -k .
+	kubectl set image deployment/startup-boost-operator manager=$(LOCAL_IMAGE) -n $(NAMESPACE)
+	kubectl patch deployment startup-boost-operator -n $(NAMESPACE) \
+	  -p '{"spec":{"template":{"spec":{"containers":[{"name":"manager","imagePullPolicy":"Never"}]}}}}'
+	@echo ""
+	@echo "✅  Operator installed (local image). Now create a StartupBoostPolicy:"
+	@echo "    kubectl apply -f config/samples/startupboostpolicy.yaml"
 
 undeploy: ## Remove all manifests and the CRD from the cluster
 	kubectl delete -k . --ignore-not-found

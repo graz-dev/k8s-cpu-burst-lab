@@ -9,4 +9,3 @@ resources:
   - config/rbac/rolebinding.yaml
   - config/manager/deployment.yaml
   - config/samples/deployment-app.yaml
-  - config/samples/startupboostpolicy.yaml

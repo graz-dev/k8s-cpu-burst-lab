@@ -69,7 +69,7 @@ KUBE_VERSION=$(kubectl version --output=json 2>/dev/null | \
   python3 -c "import sys,json; d=json.load(sys.stdin); print(d['serverVersion']['gitVersion'])" 2>/dev/null || \
   kubectl version --short 2>/dev/null | grep Server | awk '{print $3}')
 echo "    Server version: ${KUBE_VERSION}"
-echo "    Feature gate: InPlacePodVerticalScaling=true (GA since v1.33)"
+echo "    Feature gate: InPlacePodVerticalScaling=true (GA since v1.35)"
 
 # ── Install metrics-server ─────────────────────────────────────────────────────
 echo ""

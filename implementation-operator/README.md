@@ -65,24 +65,28 @@ implementation-operator/
 
 - `kind` cluster created with `scripts/setup-cluster.sh` (no extra flags needed)
 - `kubectl` configured to point at the cluster (`kind-cpu-burst-lab` context)
-- `docker` available on the host
+
+No local Docker build required — the operator image is published to GHCR by CI and pulled automatically.
 
 ---
 
 ## Running the demo
 
-```bash
-# From the repo root
-cd implementation-operator
+The install follows the same pattern as real operators: infrastructure first, then user configuration.
 
-# Build the operator image and load it into the kind cluster, then apply all manifests
-make deploy
+**Step 1 — Install the operator** (CRD + RBAC + controller + app):
+
+```bash
+kubectl apply --server-side -k implementation-operator/
 ```
 
-The `deploy` target:
-1. Runs `docker build` (multi-stage, ~2 min on first run due to module downloads)
-2. Loads the image into kind with `kind load docker-image`
-3. Applies the namespace, CRD, RBAC, operator deployment, app deployment, and policy with `kubectl apply -k .`
+**Step 2 — Create a `StartupBoostPolicy`** for the petclinic workload:
+
+```bash
+kubectl apply -f implementation-operator/config/samples/startupboostpolicy.yaml
+```
+
+The kustomization intentionally does not bundle the CR instance. Server-side apply registers the CRD schema and all other resources in one shot without any race condition, because only creating *instances* of a CRD requires it to be `Established` — registering the schema itself does not.
 
 ### Watch the operator
 
@@ -139,13 +143,8 @@ Status:
 ## Cleanup
 
 ```bash
-make undeploy
-```
-
-Or from the repo root to reset the entire demo namespace:
-
-```bash
-kubectl delete namespace cpu-burst-demo
+kubectl delete namespace cpu-burst-demo --ignore-not-found
+kubectl delete crd startupboostpolicies.startup.boost.io --ignore-not-found
 ```
 
 ---

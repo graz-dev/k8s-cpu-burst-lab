@@ -112,8 +112,9 @@ cd k8s-cpu-burst-lab
 kubectl apply -k implementation-sidecar/
 # or: kubectl apply -k implementation-deployment/
 # or: kubectl apply -k implementation-vpa/
-# or (CRD operator — image pulled from GHCR, no local build):
-#    cd implementation-operator && make deploy
+# or (CRD operator — two steps: install operator, then create policy):
+#    kubectl apply --server-side -k implementation-operator/
+#    kubectl apply -f implementation-operator/config/samples/startupboostpolicy.yaml
 
 # 4. Watch the resize happen
 # Terminal: kubectl logs -n cpu-burst-demo -l app.kubernetes.io/name=petclinic -c startup-resizer -f
@@ -192,7 +193,7 @@ k8s-cpu-burst-lab/
     ├── internal/controller/          # Event-driven reconciler
     ├── config/                       # CRD manifest, RBAC, deployment, samples
     ├── Dockerfile                    # Multi-stage: golang:1.23 → distroless
-    ├── Makefile                      # deps, build, docker-build, kind-load, deploy
+    ├── Makefile                      # deps, build, publish, deploy, deploy-local
     └── kustomization.yaml
 ```
 
