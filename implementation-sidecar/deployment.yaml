@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petclinic
+  namespace: cpu-burst-demo
+  labels:
+    app.kubernetes.io/name: petclinic
+    demo/implementation: sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: petclinic
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: petclinic
+        demo/implementation: sidecar
+    spec:
+      # ── Pin to the worker node ─────────────────────────────────────────────
+      nodeSelector:
+        demo/role: worker
+
+      serviceAccountName: startup-resizer
+
+      # ── Volumes ────────────────────────────────────────────────────────────
+      volumes:
+        - name: resizer-script
+          configMap:
+            name: startup-resizer-script
+            defaultMode: 0755
+
+      # ── Init container: wait until the node has enough burst CPU ──────────
+      # (optional — remove if not needed in your demo environment)
+      # initContainers: []
+
+      containers:
+        # ── App: Spring Petclinic on JDK 25 ─────────────────────────────────
+        - name: petclinic
+          image: ghcr.io/graz-dev/spring-petclinic-jdk25:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+
+          # ── Resource burst profile (startup phase) ──────────────────────
+          # These are the VALUES at pod creation. The sidecar will patch
+          # them down to steady-state once the app reports Ready.
+          resources:
+            requests:
+              cpu: "1500m"    # JIT compilation peak (scaled for a 4-CPU kind node)
+              memory: "512Mi"
+            limits:
+              cpu: "1500m"
+              memory: "1Gi"
+
+          # ── Key field: no container restart on CPU/Memory change ─────────
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: NotRequired
+
+          # ── Health probes ────────────────────────────────────────────────
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            failureThreshold: 40   # 40 × 10s = 400s max startup window
+            periodSeconds: 10
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 5
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:+UseG1GC -XX:MaxRAMPercentage=75.0"
+            - name: OTEL_SDK_DISABLED
+              value: "true"
+
+        # ── Sidecar: startup-resizer ─────────────────────────────────────────
+        # Shares the pod network namespace — can reach localhost:8080.
+        # Runs the resize.sh script from the ConfigMap.
+        - name: startup-resizer
+          image: bitnami/kubectl:latest
+          # bitnami/kubectl sets ENTRYPOINT=["kubectl"], so we must override
+          # the entrypoint explicitly to run our shell script.
+          command: ["/bin/sh", "/scripts/resize.sh"]
+          volumeMounts:
+            - name: resizer-script
+              mountPath: /scripts
+
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "50m"
+              memory: "64Mi"
+
+          env:
+            # Kubernetes downward API — inject pod identity into the script.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+            # Resize target — edit these to tune your steady-state profile.
+            - name: STEADY_CPU
+              value: "300m"
+            - name: STEADY_MEMORY
+              value: "512Mi"
+            - name: CONTAINER_NAME
+              value: "petclinic"
+            - name: CHECK_INTERVAL
+              value: "5"
+            - name: HEALTH_TIMEOUT
+              value: "600"

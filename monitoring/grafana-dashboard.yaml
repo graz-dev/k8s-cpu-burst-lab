@@ -1,0 +1,243 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cpu-burst-lab-dashboard
+  namespace: monitoring
+  labels:
+    # The Grafana sidecar watches for this label across all namespaces
+    # and automatically imports the dashboard — no manual import needed.
+    grafana_dashboard: "1"
+data:
+  cpu-burst-lab.json: |
+    {
+      "description": "Real-time CPU usage, requests, and limits for the petclinic workload. Shows the in-place resize from burst (1500m) to steady-state without a container restart.",
+      "editable": true,
+      "graphTooltip": 1,
+      "links": [],
+      "panels": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisBorderShow": false,
+                "axisLabel": "millicores",
+                "axisPlacement": "auto",
+                "drawStyle": "line",
+                "fillOpacity": 8,
+                "gradientMode": "opacity",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": 60000,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{ "color": "green", "value": null }]
+              },
+              "unit": "short"
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Usage" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } },
+                  { "id": "custom.fillOpacity", "value": 20 },
+                  { "id": "custom.lineWidth", "value": 3 }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "Requests" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } },
+                  { "id": "custom.lineStyle", "value": { "dash": [10, 5], "fill": "dash" } },
+                  { "id": "custom.lineWidth", "value": 2 },
+                  { "id": "custom.fillOpacity", "value": 0 }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "Limits" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } },
+                  { "id": "custom.lineStyle", "value": { "dash": [10, 5], "fill": "dash" } },
+                  { "id": "custom.lineWidth", "value": 2 },
+                  { "id": "custom.fillOpacity", "value": 0 }
+                ]
+              }
+            ]
+          },
+          "gridPos": { "h": 14, "w": 24, "x": 0, "y": 0 },
+          "id": 1,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull", "max", "min"],
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "rate(container_cpu_usage_seconds_total{namespace=\"cpu-burst-demo\", container=\"petclinic\", image!=\"\"}[30s]) * 1000",
+              "legendFormat": "Usage",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "kube_pod_container_resource_requests{namespace=\"cpu-burst-demo\", container=\"petclinic\", resource=\"cpu\"} * 1000",
+              "legendFormat": "Requests",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "kube_pod_container_resource_limits{namespace=\"cpu-burst-demo\", container=\"petclinic\", resource=\"cpu\"} * 1000",
+              "legendFormat": "Limits",
+              "refId": "C"
+            }
+          ],
+          "title": "petclinic — CPU (millicores)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green",  "value": null },
+                  { "color": "yellow", "value": 400 },
+                  { "color": "red",    "value": 900 }
+                ]
+              },
+              "unit": "short",
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 0, "y": 14 },
+          "id": 2,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "kube_pod_container_resource_requests{namespace=\"cpu-burst-demo\", container=\"petclinic\", resource=\"cpu\"} * 1000",
+              "legendFormat": "CPU Requests (m)",
+              "refId": "A"
+            }
+          ],
+          "title": "CPU Requests",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green",  "value": null },
+                  { "color": "yellow", "value": 400 },
+                  { "color": "red",    "value": 900 }
+                ]
+              },
+              "unit": "short",
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 8, "y": 14 },
+          "id": 3,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "kube_pod_container_resource_limits{namespace=\"cpu-burst-demo\", container=\"petclinic\", resource=\"cpu\"} * 1000",
+              "legendFormat": "CPU Limits (m)",
+              "refId": "A"
+            }
+          ],
+          "title": "CPU Limits",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                {
+                  "options": { "0": { "color": "green", "index": 0, "text": "0  ✓  no restart" } },
+                  "type": "value"
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red",   "value": 1 }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 8, "x": 16, "y": 14 },
+          "id": 4,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value_and_name"
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "kube_pod_container_status_restarts_total{namespace=\"cpu-burst-demo\", container=\"petclinic\"}",
+              "legendFormat": "Restarts",
+              "refId": "A"
+            }
+          ],
+          "title": "Container Restarts",
+          "type": "stat"
+        }
+      ],
+      "refresh": "5s",
+      "schemaVersion": 39,
+      "tags": ["cpu-burst-lab", "in-place-resize"],
+      "time": { "from": "now-15m", "to": "now" },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "CPU Burst Lab — Startup Resize",
+      "uid": "cpu-burst-lab-v1",
+      "version": 1
+    }

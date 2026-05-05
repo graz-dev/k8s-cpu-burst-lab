@@ -1,0 +1,52 @@
+# kind-config.yaml
+# Creates a 2-node cluster (1 control-plane + 1 worker) running Kubernetes v1.36.
+# InPlacePodVerticalScaling is GA in 1.33+ but explicitly enabled here for clarity.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cpu-burst-lab
+
+featureGates:
+  InPlacePodVerticalScaling: true
+
+nodes:
+  # ── Control-plane ──────────────────────────────────────────────────────────
+  - role: control-plane
+    image: kindest/node:v1.35.1
+    # Grafana is exposed as a NodePort service on 30300 inside the cluster.
+    # This mapping makes it reachable on the host at http://localhost:3000
+    # without any kubectl port-forward.
+    extraPortMappings:
+      - containerPort: 30300
+        hostPort: 3000
+        protocol: TCP
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            feature-gates: "InPlacePodVerticalScaling=true"
+        controllerManager:
+          extraArgs:
+            feature-gates: "InPlacePodVerticalScaling=true"
+        scheduler:
+          extraArgs:
+            feature-gates: "InPlacePodVerticalScaling=true"
+      - |
+        kind: KubeletConfiguration
+        featureGates:
+          InPlacePodVerticalScaling: true
+
+  # ── Worker node ─────────────────────────────────────────────────────────────
+  # All demo workloads are pinned here via nodeSelector: demo/role=worker.
+  - role: worker
+    image: kindest/node:v1.35.1
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        featureGates:
+          InPlacePodVerticalScaling: true
+    # Extra port mappings are optional — uncomment if you want host access to the app.
+    # extraPortMappings:
+    #   - containerPort: 30080
+    #     hostPort: 8080
+    #     protocol: TCP

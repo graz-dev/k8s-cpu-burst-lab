@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petclinic
+  namespace: cpu-burst-demo
+  labels:
+    app.kubernetes.io/name: petclinic
+    demo/implementation: vpa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: petclinic
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: petclinic
+    spec:
+      nodeSelector:
+        demo/role: worker
+
+      containers:
+        - name: petclinic
+          image: ghcr.io/graz-dev/spring-petclinic-jdk25:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+
+          # ── Initial resource requests ──────────────────────────────────────
+          # Set a reasonable starting point. VPA will override these on pod
+          # creation (Initial mode) or adjust them in-place (InPlaceOrRecreate).
+          # The VPA object below defines the min/max bounds.
+          resources:
+            requests:
+              cpu: "1500m"    # VPA will learn to reduce this after startup
+              memory: "512Mi"
+            limits:
+              cpu: "1500m"
+              memory: "1Gi"
+
+          # ── Prevent JVM restart on resource change ─────────────────────────
+          # VPA in InPlaceOrRecreate mode will respect this field.
+          # If an in-place resize is feasible (restartPolicy=NotRequired),
+          # VPA will use it. It only falls back to eviction if memory must change
+          # and the policy requires a restart.
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: NotRequired
+
+          # ── Health probes ──────────────────────────────────────────────────
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            failureThreshold: 40
+            periodSeconds: 10
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 5
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:+UseG1GC -XX:MaxRAMPercentage=75.0"
+            - name: OTEL_SDK_DISABLED
+              value: "true"

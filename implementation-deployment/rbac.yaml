@@ -1,0 +1,53 @@
+---
+# ServiceAccount for the shell-operator controller.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: startup-boost-operator
+  namespace: cpu-burst-demo
+
+---
+# ClusterRole — the operator watches pods across the target namespace and
+# patches them when a startup burst is complete.
+# Scope is intentionally narrow: only pods in cpu-burst-demo.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: startup-boost-operator
+  namespace: cpu-burst-demo
+rules:
+  # Read and watch pods to detect Ready transitions.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # Submit in-place resize patches via the dedicated subresource (K8s 1.33+ GA).
+  # kubectl patch --subresource=resize does GET then PATCH, so both verbs are required.
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch", "update"]
+
+  # Annotate pods after resize (anti-Shrinkage-Trap guard) — requires pods/patch.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["patch"]
+
+  # shell-operator requires ConfigMap access for its own bookkeeping.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: startup-boost-operator
+  namespace: cpu-burst-demo
+subjects:
+  - kind: ServiceAccount
+    name: startup-boost-operator
+    namespace: cpu-burst-demo
+roleRef:
+  kind: Role
+  name: startup-boost-operator
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,39 @@
+---
+# ServiceAccount used by the startup-resizer sidecar container.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: startup-resizer
+  namespace: cpu-burst-demo
+
+---
+# Role grants the minimum surface needed to read pod state and submit a resize patch.
+# pods/resize is the dedicated subresource introduced in KEP-1287 (GA in 1.33).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: startup-resizer
+  namespace: cpu-burst-demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # kubectl patch --subresource=resize does a GET then a PATCH, so both verbs needed.
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch", "update"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: startup-resizer
+  namespace: cpu-burst-demo
+subjects:
+  - kind: ServiceAccount
+    name: startup-resizer
+    namespace: cpu-burst-demo
+roleRef:
+  kind: Role
+  name: startup-resizer
+  apiGroup: rbac.authorization.k8s.io

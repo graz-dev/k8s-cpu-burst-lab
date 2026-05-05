@@ -1,0 +1,37 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: startup-boost-operator
+  namespace: cpu-burst-demo
+rules:
+  # Read and watch the CRD instances we reconcile.
+  - apiGroups: ["startup.boost.io"]
+    resources: ["startupboostpolicies"]
+    verbs: ["get", "list", "watch"]
+
+  # Write the status subresource back after each reconcile.
+  - apiGroups: ["startup.boost.io"]
+    resources: ["startupboostpolicies/status"]
+    verbs: ["get", "update", "patch"]
+
+  # Read pods to detect Ready transitions (via the shared informer cache).
+  # Patch pods to write the startup.boost.io/* annotations after resize.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch"]
+
+  # Submit in-place resize patches via the dedicated pods/resize subresource.
+  # GET is required because controller-runtime reads the object before patching.
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch", "update"]
+
+  # Record Kubernetes Events on the CRD objects.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # Leader election — required when running multiple operator replicas.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

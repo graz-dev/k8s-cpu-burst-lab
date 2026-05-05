@@ -1,0 +1,22 @@
+apiVersion: startup.boost.io/v1alpha1
+kind: StartupBoostPolicy
+metadata:
+  name: petclinic-boost
+  namespace: cpu-burst-demo
+spec:
+  # Which pods to manage. Any pod in this namespace with these labels
+  # will be resized once its Ready condition becomes True.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: petclinic
+
+  # Per-container steady-state configuration.
+  # Only CPU is changed — memory limits are left intact so the pod stays
+  # Burstable QoS (resizing to Guaranteed is rejected by Kubernetes).
+  containers:
+    - name: petclinic
+      steadyCPU: "300m"
+
+  # Optional: wait N seconds after Ready before resizing.
+  # Useful if your readiness probe fires slightly before the JVM is fully warm.
+  stabilizationSeconds: 0

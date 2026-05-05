@@ -1,0 +1,62 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: petclinic-vpa
+  namespace: cpu-burst-demo
+  labels:
+    app.kubernetes.io/name: petclinic
+    demo/implementation: vpa
+spec:
+  # ── Target: the petclinic Deployment ────────────────────────────────────────
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: petclinic
+
+  # ── Update policy ──────────────────────────────────────────────────────────
+  updatePolicy:
+    # InPlaceOrRecreate: VPA tries an in-place resize first (using the
+    # pods/resize subresource). Only evicts the pod if an in-place resize
+    # is not possible (e.g. a memory change with restartPolicy=RestartContainer).
+    # This is the correct mode for our JVM demo — minimises restarts.
+    updateMode: InPlaceOrRecreate
+
+    # Minimum number of replicas that must remain available during an update.
+    # Protects single-replica deployments from going to 0.
+    minReplicas: 1
+
+  # ── Resource policy ────────────────────────────────────────────────────────
+  resourcePolicy:
+    containerPolicies:
+      - containerName: petclinic
+
+        # VPA will not recommend or set values outside these bounds.
+        minAllowed:
+          cpu: "200m"       # Never go below 0.2 vCPU — JVM needs a floor
+          memory: "256Mi"
+        maxAllowed:
+          cpu: "4000m"      # Cap at 4 vCPUs — prevents recommendation runaway
+          memory: "2Gi"
+
+        # Control which resources VPA manages.
+        controlledResources: ["cpu", "memory"]
+
+        # RequestsAndLimits: VPA adjusts both requests and limits toward
+        # the recommended value. VPA will not flip the pod's QoS class —
+        # if equalising a resource would change Burstable→Guaranteed, it
+        # adjusts only the request, keeping the original limit intact.
+        controlledValues: RequestsAndLimits
+
+      # Exclude the startup-resizer sidecar from VPA management.
+      # (Only relevant if you mix sidecar + VPA in a single deployment.)
+      # - containerName: startup-resizer
+      #   mode: "Off"
+
+---
+# ── VPA Checkpoint (informational, auto-created by VPA) ─────────────────────
+# VPA stores its learned resource history in VPACheckpoint objects.
+# This object is managed by the Recommender — you do not need to create it.
+# Listed here for documentation purposes only.
+#
+# kubectl get vpacheckpoint -n cpu-burst-demo petclinic-vpa-petclinic
+# kubectl get vpa petclinic-vpa -n cpu-burst-demo -o yaml

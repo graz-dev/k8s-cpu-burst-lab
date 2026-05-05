@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - config/namespace.yaml
+  - config/crd/startup.boost.io_startupboostpolicies.yaml
+  - config/rbac/serviceaccount.yaml
+  - config/rbac/role.yaml
+  - config/rbac/rolebinding.yaml
+  - config/manager/deployment.yaml
+  - config/samples/deployment-app.yaml
+  - config/samples/startupboostpolicy.yaml
