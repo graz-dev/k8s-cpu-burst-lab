@@ -1,6 +1,6 @@
 # kind-config.yaml
 # Creates a 2-node cluster (1 control-plane + 1 worker) running Kubernetes v1.36.
-# InPlacePodVerticalScaling is GA in 1.33+ but explicitly enabled here for clarity.
+# InPlacePodVerticalScaling is GA in 1.35+ but explicitly enabled here for clarity.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: cpu-burst-lab

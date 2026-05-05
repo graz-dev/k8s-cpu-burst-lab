@@ -28,7 +28,7 @@ Once the resize succeeds, the controller stamps `startup.boost.io/resized: "true
 The resize patch changes only CPU requests and limits. Memory is intentionally left at its original value. Kubernetes rejects any resize that would change a pod's QoS class (Burstable → Guaranteed), so touching memory would make the patch fail for most real workloads.
 
 **`pods/resize` subresource.**
-In Kubernetes 1.33 (GA) the in-place resize path requires patching `pods/<name>/resize`, not the pod directly. Direct PATCH on the pod endpoint is rejected by the immutability webhook even with `InPlacePodVerticalScaling` enabled. The controller uses `r.SubResource("resize").Patch(...)` from controller-runtime, which routes to the correct endpoint automatically.
+In Kubernetes 1.35 (GA) the in-place resize path requires patching `pods/<name>/resize`, not the pod directly. Direct PATCH on the pod endpoint is rejected by the immutability webhook even with `InPlacePodVerticalScaling` enabled. The controller uses `r.SubResource("resize").Patch(...)` from controller-runtime, which routes to the correct endpoint automatically.
 
 **Stabilization window.**
 `spec.stabilizationSeconds` delays the resize after `Ready`. This is useful when a readiness probe is configured to fire slightly before the JVM has finished class-loading (common in Spring Boot apps with actuator probes). Set it to `0` (the default) for immediate resize.

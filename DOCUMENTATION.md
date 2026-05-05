@@ -636,7 +636,7 @@ kubectl delete namespace cpu-burst-demo --force --grace-period=0
 
 ### `cannot patch resource "pods" ... may not change fields`
 
-You are hitting the Kubernetes immutability validation on the main pod endpoint. In K8s 1.33+, in-place resize **must** go through the `pods/resize` subresource. The fix is already in place in this repo — all `kubectl patch` calls use `--subresource=resize`.
+You are hitting the Kubernetes immutability validation on the main pod endpoint. In K8s 1.35+, in-place resize **must** go through the `pods/resize` subresource. The fix is already in place in this repo — all `kubectl patch` calls use `--subresource=resize`.
 
 If you see this error in your own scripts, verify:
 ```bash
@@ -718,10 +718,10 @@ This sets both the entrypoint and the command, replacing the default `ENTRYPOINT
 
 ### `pods/resize` subresource
 
-Kubernetes 1.33 introduced a **dedicated subresource** for in-place pod resize. Direct PATCH on the main pod endpoint is rejected for resource fields by the immutability validator, even with the feature gate enabled.
+Kubernetes 1.35 introduced a **dedicated subresource** for in-place pod resize. Direct PATCH on the main pod endpoint is rejected for resource fields by the immutability validator, even with the feature gate enabled.
 
 ```bash
-# Correct (K8s 1.33+):
+# Correct (K8s 1.35+):
 kubectl patch pod <name> --subresource=resize --type=strategic -p '...'
 
 # Wrong (always rejected for resource fields):

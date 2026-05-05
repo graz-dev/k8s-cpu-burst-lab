@@ -41,7 +41,7 @@ Unlike the sidecar and operator approaches, VPA is **driven by observed metrics*
 
 ### Why `updateMode: InPlaceOrRecreate`?
 
-The classic VPA update modes are `Off` (recommendations only, no enforcement) and `Auto` (evict and recreate pods to apply recommendations). `InPlaceOrRecreate` is a newer mode (available since VPA 1.0, using `pods/resize` GA since K8s 1.33) that:
+The classic VPA update modes are `Off` (recommendations only, no enforcement) and `Auto` (evict and recreate pods to apply recommendations). `InPlaceOrRecreate` is a newer mode (available since VPA 1.0, using `pods/resize` GA since K8s 1.35) that:
 1. Tries an in-place resize first — no disruption, no JVM restart
 2. Falls back to eviction only if in-place is not possible
 

@@ -199,7 +199,7 @@ func (r *StartupBoostPolicyReconciler) processPod(
 }
 
 // applyResize submits the in-place resize patch for one container via the
-// pods/resize subresource (Kubernetes 1.33+ GA for in-place pod resize).
+// pods/resize subresource (Kubernetes 1.35+ GA for in-place pod resize).
 // Only CPU is changed; memory limits are left intact to avoid flipping the
 // pod's QoS class from Burstable to Guaranteed, which K8s rejects at resize time.
 func (r *StartupBoostPolicyReconciler) applyResize(
@@ -224,7 +224,7 @@ func (r *StartupBoostPolicyReconciler) applyResize(
 	}
 
 	// controller-runtime's SubResource("resize") targets pods/<name>/resize —
-	// the dedicated API subresource introduced in K8s 1.33 for in-place resize.
+	// the dedicated API subresource introduced in K8s 1.35 for in-place resize.
 	// A direct PATCH on the pod endpoint is rejected by the immutability validator
 	// even with InPlacePodVerticalScaling enabled.
 	return r.SubResource("resize").Patch(ctx, pod,

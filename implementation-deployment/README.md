@@ -59,7 +59,7 @@ Pod startup timeline
 
 This implementation was originally built with [shell-operator](https://github.com/flant/shell-operator) v1.4.10. It was replaced with a `bitnami/kubectl` polling loop for two concrete reasons discovered during testing:
 
-1. **kubectl version too old**: shell-operator v1.4.10 bundles kubectl 1.27. The `--subresource=resize` flag was added in kubectl 1.33. Every resize attempt failed with:
+1. **kubectl version too old**: shell-operator v1.4.10 bundles kubectl 1.27. The `--subresource=resize` flag was added in kubectl 1.35. Every resize attempt failed with:
    ```
    error: invalid subresource value: resize. Must be one of [status scale]
    ```

@@ -55,7 +55,7 @@ Pod startup timeline
 
 ### Why `bitnami/kubectl` for the sidecar image?
 
-The sidecar needs to call the Kubernetes API to (a) check the pod's Ready condition and (b) submit the resize patch. `bitnami/kubectl` is the smallest image that bundles a recent-enough `kubectl` to support `--subresource=resize` (introduced in kubectl 1.33).
+The sidecar needs to call the Kubernetes API to (a) check the pod's Ready condition and (b) submit the resize patch. `bitnami/kubectl` is the smallest image that bundles a recent-enough `kubectl` to support `--subresource=resize` (introduced in kubectl 1.35).
 
 Alternatives considered:
 - **Custom shell script + `curl`**: requires crafting raw HTTPS requests with Bearer token, parsing JSON responses manually — brittle and harder to maintain.
@@ -90,7 +90,7 @@ The pod starts as **Burstable** QoS: `cpu requests = cpu limits = 1500m`, `memor
 
 ### Why `--subresource=resize` instead of a direct pod PATCH?
 
-In Kubernetes 1.33+ (when in-place resize became GA), the API server's immutability validator blocks direct PATCH on pod resource fields. Even with `InPlacePodVerticalScaling=true` and `resizePolicy: NotRequired` set, a direct `kubectl patch pod` returns:
+In Kubernetes 1.35+ (when in-place resize became GA), the API server's immutability validator blocks direct PATCH on pod resource fields. Even with `InPlacePodVerticalScaling=true` and `resizePolicy: NotRequired` set, a direct `kubectl patch pod` returns:
 
 ```
 The Pod "petclinic-xxx" is invalid: spec.containers[0].resources: ...

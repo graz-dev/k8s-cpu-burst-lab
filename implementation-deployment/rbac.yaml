@@ -21,7 +21,7 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
 
-  # Submit in-place resize patches via the dedicated subresource (K8s 1.33+ GA).
+  # Submit in-place resize patches via the dedicated subresource (K8s 1.35+ GA).
   # kubectl patch --subresource=resize does GET then PATCH, so both verbs are required.
   - apiGroups: [""]
     resources: ["pods/resize"]

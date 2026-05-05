@@ -8,7 +8,7 @@ data:
   # A polling-loop controller: every POLL_INTERVAL seconds it inspects all
   # pods labelled "startup-boost=enabled", and for any pod that is Ready but
   # not yet annotated as resized, it submits an in-place resize patch via the
-  # pods/resize subresource (K8s 1.33+ GA).
+  # pods/resize subresource (K8s 1.35+ GA).
   # Runs inside bitnami/kubectl which ships a recent-enough kubectl version
   # to support --subresource=resize.
   controller.sh: |

@@ -68,7 +68,7 @@ data:
     EOF
     )
 
-    # In K8s 1.33+ (GA), in-place resize requires the dedicated pods/resize
+    # In K8s 1.35+ (GA), in-place resize requires the dedicated pods/resize
     # subresource — direct PATCH on pods is still blocked by immutability validation.
     if kubectl patch pod "${POD}" \
         -n "${NAMESPACE}" \

@@ -1,7 +1,7 @@
 # Stop Overprovisioning for Application Startup
 
 > **Talk companion repo** — "Stop Overprovisioning for Application Startup"
-> Demonstrates **In-Place Pod Resize** (GA in Kubernetes 1.33) as a zero-restart strategy for handling the JVM CPU burst at startup, without permanently overprovisioning your cluster.
+> Demonstrates **In-Place Pod Resize** (GA in Kubernetes 1.35) as a zero-restart strategy for handling the JVM CPU burst at startup, without permanently overprovisioning your cluster.
 
 ---
 
@@ -39,7 +39,7 @@ Traditional solutions force a choice:
 
 ## The Solution: In-Place Pod Resize
 
-Introduced as Alpha in Kubernetes 1.27 (KEP-1287) and promoted to **GA in 1.33**, In-Place Pod Vertical Scaling lets you change a running pod's CPU/Memory **without restarting the container**.
+Introduced as Alpha in Kubernetes 1.27 (KEP-1287) and promoted to **GA in 1.35**, In-Place Pod Vertical Scaling lets you change a running pod's CPU/Memory **without restarting the container**.
 
 ```yaml
 # The field that prevents JVM restart on resize:
