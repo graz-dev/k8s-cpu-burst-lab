@@ -22,9 +22,9 @@ data:
     NAMESPACE="${CONTROLLER_NAMESPACE:-cpu-burst-demo}"
     LABEL_SELECTOR="startup-boost=enabled"
 
-    echo "[operator] Controller started. Polling every ${POLL_INTERVAL}s."
-    echo "[operator] Target: pods{${LABEL_SELECTOR}} in ns ${NAMESPACE}"
-    echo "[operator] Steady-state: cpu=${STEADY_CPU} memory=${STEADY_MEMORY}"
+    echo "[controller] Controller started. Polling every ${POLL_INTERVAL}s."
+    echo "[controller] Target: pods{${LABEL_SELECTOR}} in ns ${NAMESPACE}"
+    echo "[controller] Steady-state: cpu=${STEADY_CPU} memory=${STEADY_MEMORY}"
 
     while true; do
       # List all pods matching the label selector (one name per line).
@@ -60,11 +60,11 @@ data:
         fi
 
         if [ -n "${RESIZE_STATUS}" ]; then
-          echo "[operator] ${POD}: resize in progress (${RESIZE_STATUS}), skipping."
+          echo "[controller] ${POD}: resize in progress (${RESIZE_STATUS}), skipping."
           continue
         fi
 
-        echo "[operator] ${POD}: Ready=True, not yet resized. Triggering downscale..."
+        echo "[controller] ${POD}: Ready=True, not yet resized. Triggering downscale..."
 
         # ── Submit the in-place resize via pods/resize subresource ────────
         # Only resize CPU — keeping memory limits > memory requests preserves
@@ -77,9 +77,9 @@ data:
             --subresource=resize \
             --type=strategic \
             -p "${PATCH}"; then
-          echo "[operator] ${POD}: resize patch accepted."
+          echo "[controller] ${POD}: resize patch accepted."
         else
-          echo "[operator] ${POD}: resize patch FAILED — will retry next cycle."
+          echo "[controller] ${POD}: resize patch FAILED — will retry next cycle."
           continue
         fi
 
@@ -91,7 +91,7 @@ data:
           "startup-boost.io/steady-cpu=${STEADY_CPU}" \
           --overwrite
 
-        echo "[operator] ${POD}: annotated. Will run at ${STEADY_CPU} CPU."
+        echo "[controller] ${POD}: annotated. Will run at ${STEADY_CPU} CPU."
       done
 
       sleep "${POLL_INTERVAL}"

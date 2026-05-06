@@ -5,5 +5,5 @@ resources:
   - namespace.yaml
   - rbac.yaml
   - configmap-hook.yaml
-  - deployment-operator.yaml
+  - deployment-controller.yaml
   - deployment-app.yaml

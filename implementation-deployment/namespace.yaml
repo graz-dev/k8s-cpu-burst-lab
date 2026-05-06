@@ -3,4 +3,4 @@ kind: Namespace
 metadata:
   name: cpu-burst-demo
   labels:
-    demo/implementation: operator
+    demo/implementation: deployment

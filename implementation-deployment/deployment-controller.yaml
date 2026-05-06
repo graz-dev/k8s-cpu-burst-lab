@@ -1,25 +1,25 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: startup-boost-operator
+  name: startup-boost-controller
   namespace: cpu-burst-demo
   labels:
-    app.kubernetes.io/name: startup-boost-operator
-    demo/implementation: operator
+    app.kubernetes.io/name: startup-boost-controller
+    demo/implementation: deployment
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: startup-boost-operator
+      app.kubernetes.io/name: startup-boost-controller
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: startup-boost-operator
+        app.kubernetes.io/name: startup-boost-controller
     spec:
       nodeSelector:
         demo/role: worker
 
-      serviceAccountName: startup-boost-operator
+      serviceAccountName: startup-boost-controller
 
       volumes:
         - name: hooks
@@ -30,7 +30,6 @@ spec:
       containers:
         - name: controller
           # bitnami/kubectl ships kubectl 1.32+ which supports --subresource=resize.
-          # The controller runs a plain sh polling loop — no operator framework needed.
           image: bitnami/kubectl:latest
           # Override ENTRYPOINT=["kubectl"] to run our controller script instead.
           command: ["/bin/sh", "/hooks/controller.sh"]

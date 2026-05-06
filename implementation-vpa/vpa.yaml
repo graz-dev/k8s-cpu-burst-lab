@@ -35,7 +35,11 @@ spec:
           cpu: "200m"       # Never go below 0.2 vCPU — JVM needs a floor
           memory: "256Mi"
         maxAllowed:
-          cpu: "4000m"      # Cap at 4 vCPUs — prevents recommendation runaway
+          cpu: "1200m"      # Must stay below the burst request (1500m) so VPA's
+                            # upperBound is capped below the pod's starting spec,
+                            # causing the updater to trigger once the pod is not
+                            # "short-lived". Without this cap, 1500m falls inside
+                            # [lowerBound, upperBound] and the updater never fires.
           memory: "2Gi"
 
         # Control which resources VPA manages.
@@ -47,10 +51,10 @@ spec:
         # adjusts only the request, keeping the original limit intact.
         controlledValues: RequestsAndLimits
 
-      # Exclude the startup-resizer sidecar from VPA management.
-      # (Only relevant if you mix sidecar + VPA in a single deployment.)
-      # - containerName: startup-resizer
-      #   mode: "Off"
+      # Exclude the startup-resizer sidecar if it is present (e.g. when running
+      # the VPA implementation on top of the sidecar without a namespace reset).
+      - containerName: startup-resizer
+        mode: "Off"
 
 ---
 # ── VPA Checkpoint (informational, auto-created by VPA) ─────────────────────

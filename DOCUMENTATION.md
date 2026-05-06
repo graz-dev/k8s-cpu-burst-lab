@@ -241,20 +241,20 @@ kubectl apply -k implementation-deployment/
 
 ```bash
 kubectl logs -n cpu-burst-demo \
-  -l app.kubernetes.io/name=startup-boost-operator -f
+  -l app.kubernetes.io/name=startup-boost-controller -f
 ```
 
 ```
-[operator] Controller started. Polling every 10s.
-[operator] Target: pods{startup-boost=enabled} in ns cpu-burst-demo
-[operator] Steady-state: cpu=300m memory=512Mi
-[operator] petclinic-xxx-yyy: resize in progress (), skipping.    ← first polls while app starts
+[controller] Controller started. Polling every 10s.
+[controller] Target: pods{startup-boost=enabled} in ns cpu-burst-demo
+[controller] Steady-state: cpu=300m memory=512Mi
+[controller] petclinic-xxx-yyy: resize in progress (), skipping.    ← first polls while app starts
 ...
-[operator] petclinic-xxx-yyy: Ready=True, not yet resized. Triggering downscale...
+[controller] petclinic-xxx-yyy: Ready=True, not yet resized. Triggering downscale...
 pod/petclinic-xxx-yyy patched
-[operator] petclinic-xxx-yyy: resize patch accepted.
+[controller] petclinic-xxx-yyy: resize patch accepted.
 pod/petclinic-xxx-yyy annotated
-[operator] petclinic-xxx-yyy: annotated. Will run at 300m CPU.
+[controller] petclinic-xxx-yyy: annotated. Will run at 300m CPU.
 ```
 
 ### Confirm the annotation (Shrinkage Trap guard)
@@ -301,12 +301,28 @@ bash implementation-vpa/install-vpa.sh
 
 ### Apply
 
+The install is split into two steps to prevent the VPA admission controller from overriding the pod's burst CPU at creation time.
+
+**Step 1 — Create the namespace and the petclinic Deployment** (pod starts at 1500m burst):
+
 ```bash
 # Clean up any previous implementation first
 kubectl delete namespace cpu-burst-demo --ignore-not-found
 
 kubectl apply -k implementation-vpa/
 ```
+
+**Step 2 — Apply the VPA object** after the pod is Ready (JIT warmup has completed):
+
+```bash
+kubectl wait pod -n cpu-burst-demo \
+  -l app.kubernetes.io/name=petclinic \
+  --for=condition=Ready --timeout=300s
+
+kubectl apply -f implementation-vpa/vpa.yaml
+```
+
+> **Why two steps?** If the VPA object is created before the pod, the VPA admission controller intercepts pod creation and applies its cached recommendation (e.g. 200m), bypassing the burst phase entirely. Applying the VPA after the pod is Ready lets the JVM complete JIT warmup at full burst CPU, then VPA observes the dropping steady-state usage and resizes in-place.
 
 ### Watch the VPA recommendation develop
 

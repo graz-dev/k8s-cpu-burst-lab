@@ -5,7 +5,7 @@ metadata:
   namespace: cpu-burst-demo
   labels:
     app.kubernetes.io/name: petclinic
-    demo/implementation: operator
+    demo/implementation: deployment
 spec:
   replicas: 1
   selector:
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: petclinic
-        # This label is the trigger: the operator hook only watches pods with
+        # This label is the trigger: the controller only watches pods with
         # startup-boost=enabled. Remove the label to opt-out a workload.
         startup-boost: "enabled"
     spec:
@@ -23,7 +23,7 @@ spec:
         demo/role: worker
 
       # No special ServiceAccount needed — the app has no K8s API access.
-      # The operator pod handles all API calls.
+      # The controller pod handles all API calls.
 
       containers:
         - name: petclinic
@@ -34,7 +34,7 @@ spec:
               containerPort: 8080
 
           # ── Burst resources (startup phase) ────────────────────────────────
-          # The operator will patch these down to steady-state after the Ready
+          # The controller will patch these down to steady-state after the Ready
           # condition transitions to True.
           resources:
             requests:

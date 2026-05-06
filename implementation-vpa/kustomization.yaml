@@ -4,4 +4,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - deployment.yaml
-  - vpa.yaml
+  # vpa.yaml is applied AFTER the pod becomes Ready — see DOCUMENTATION.md §7.
+  # Applying VPA before the pod starts causes the admission controller to
+  # override the burst CPU (1500m) with its cached recommendation, skipping
+  # the JIT warmup phase entirely.

@@ -1,4 +1,4 @@
-# Implementation 2: Polling-Loop Controller ("Operator")
+# Implementation 2: Polling-Loop Controller
 
 ## How It Works
 
@@ -32,12 +32,12 @@ Pod startup timeline
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ Deployment: petclinic                                │   │
 │  │   label: startup-boost=enabled                      │   │
-│  │   cpu: 1500m (burst) → 300m (in-place, via operator) │   │
+│  │   cpu: 1500m (burst) → 300m (in-place, via controller) │   │
 │  └────────────────────────┬─────────────────────────────┘   │
 │                           │ Pod.status.conditions[Ready]=True │
 │                           ▼                                  │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │ Deployment: startup-boost-operator                   │   │
+│  │ Deployment: startup-boost-controller                 │   │
 │  │   image: bitnami/kubectl                             │   │
 │  │   script: /hooks/controller.sh (polling loop)        │   │
 │  │                                                      │   │
@@ -115,7 +115,7 @@ Three independent guards break this:
 
 ## RBAC
 
-The operator's `ServiceAccount` (`startup-boost-operator`) needs:
+The controller's `ServiceAccount` (`startup-boost-controller`) needs:
 - `pods: [get, list, watch]` — to list pods and read Ready conditions
 - `pods: [patch]` — to write the `startup-boost.io/*` annotations
 - `pods/resize: [get, patch, update]` — GET is required because kubectl reads before patching
@@ -133,7 +133,7 @@ kubectl get pods -n cpu-burst-demo -w
 
 # Follow the controller log (see the poll cycle and resize trigger)
 kubectl logs -n cpu-burst-demo \
-  -l app.kubernetes.io/name=startup-boost-operator -f
+  -l app.kubernetes.io/name=startup-boost-controller -f
 
 # Watch CPU allocation drop in real-time
 watch -n2 "kubectl get pod -n cpu-burst-demo \
@@ -159,7 +159,7 @@ labels:
   startup-boost: "enabled"
 ```
 
-No sidecar to inject, no ServiceAccount per workload, no change to the operator.
+No sidecar to inject, no ServiceAccount per workload, no change to the controller.
 
 ## Trade-offs
 
