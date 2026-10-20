@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-cluster.sh — Bootstrap the cpu-burst-lab kind cluster.
+# setup-cluster.sh - Bootstrap the cpu-burst-lab kind cluster.
 # Usage: ./scripts/setup-cluster.sh [--with-vpa]
 set -euo pipefail
 
@@ -22,7 +22,7 @@ done
 # ── Prerequisite checks ────────────────────────────────────────────────────────
 check_tool() {
   if ! command -v "$1" &>/dev/null; then
-    echo "❌  '$1' not found. Please install it and retry."
+    echo "'$1' not found. Please install it and retry."
     exit 1
   fi
 }
@@ -37,9 +37,9 @@ echo ""
 
 # ── Create the kind cluster ────────────────────────────────────────────────────
 if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-  echo "⚠️   Cluster '${CLUSTER_NAME}' already exists. Skipping creation."
+  echo "Cluster '${CLUSTER_NAME}' already exists. Skipping creation."
 else
-  echo "🔧  Creating kind cluster '${CLUSTER_NAME}'..."
+  echo "Creating kind cluster '${CLUSTER_NAME}'..."
   # GRAFANA_HOST_PORT overrides the host port mapped to Grafana (default 3000).
   KIND_CONFIG="$(mktemp)"
   sed "s/hostPort: 3000/hostPort: ${GRAFANA_HOST_PORT:-3000}/" "${REPO_ROOT}/kind-config.yaml" > "${KIND_CONFIG}"
@@ -48,7 +48,7 @@ else
     --config "${KIND_CONFIG}" \
     --wait 120s
   rm -f "${KIND_CONFIG}"
-  echo "✅  Cluster created."
+  echo "Cluster created."
 fi
 
 # ── Set kubectl context ────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ kubectl config use-context "kind-${CLUSTER_NAME}"
 
 # ── Label the worker node ──────────────────────────────────────────────────────
 echo ""
-echo "🏷️   Labelling worker node with '${WORKER_LABEL}'..."
+echo "Labelling worker node with '${WORKER_LABEL}'..."
 WORKER_NODE="$(kubectl get nodes --no-headers \
   -l '!node-role.kubernetes.io/control-plane' \
   -o jsonpath='{.items[0].metadata.name}')"
@@ -70,7 +70,7 @@ echo "Server version: $(kubectl version -o json 2>/dev/null | python3 -c "import
 
 # ── Install metrics-server ─────────────────────────────────────────────────────
 echo ""
-echo "📊  Installing metrics-server (needed for kubectl top)..."
+echo "Installing metrics-server (needed for kubectl top)..."
 helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update &>/dev/null
 helm upgrade --install metrics-server metrics-server/metrics-server \
   --namespace kube-system \
@@ -78,12 +78,12 @@ helm upgrade --install metrics-server metrics-server/metrics-server \
   --set args="{--kubelet-insecure-tls}" \
   --wait \
   --timeout 120s
-echo "✅  metrics-server installed."
+echo "metrics-server installed."
 
 # ── Optionally install VPA ─────────────────────────────────────────────────────
 if [[ "${WITH_VPA}" == "true" ]]; then
   echo ""
-  echo "📈  Installing Vertical Pod Autoscaler..."
+  echo "Installing Vertical Pod Autoscaler..."
   bash "${REPO_ROOT}/implementation-vpa/install-vpa.sh"
 fi
 

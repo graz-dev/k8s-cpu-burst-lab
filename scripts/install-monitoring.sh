@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# install-monitoring.sh — Install Prometheus + Grafana (kube-prometheus-stack)
+# install-monitoring.sh - Install Prometheus + Grafana (kube-prometheus-stack)
 # and provision the CPU Burst Lab dashboard automatically via the Grafana sidecar.
 #
 # Grafana is exposed as NodePort 30300, which kind maps to localhost:3000 via
-# the extraPortMappings in kind-config.yaml — no kubectl port-forward needed.
+# the extraPortMappings in kind-config.yaml - no kubectl port-forward needed.
 #
 # Requires: helm, kubectl, cluster created with kind-config.yaml.
 set -euo pipefail
@@ -23,9 +23,9 @@ helm repo add prometheus-community \
 
 # ── Install kube-prometheus-stack ──────────────────────────────────────────────
 # Key settings for a 4-CPU kind cluster:
-#   alertmanager disabled    — not needed for a demo
-#   default dashboards off   — we provision our own via the sidecar ConfigMap
-#   scrapeInterval=5s        — default 60s is too coarse to see the resize dip
+#   alertmanager disabled    - not needed for a demo
+#   default dashboards off   - we provision our own via the sidecar ConfigMap
+#   scrapeInterval=5s        - default 60s is too coarse to see the resize dip
 #   grafana.service.type=NodePort + nodePort=30300
 #     → kind maps containerPort 30300 → hostPort 3000 (see kind-config.yaml)
 #     → Grafana is available at http://localhost:3000 without port-forward

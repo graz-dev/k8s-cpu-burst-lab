@@ -19,11 +19,14 @@ export default function () {
   for (const url of pages) {
     const res = http.get(url);
     check(res, { 'status is 200': (r) => r.status === 200 });
+    // One line per request: epoch ms, duration ms, status. lab.sh computes
+    // percentiles for an exact time window from these.
+    console.log(`K6_POINT ${Date.now()} ${res.timings.duration.toFixed(2)} ${res.status}`);
     sleep(0.2);
   }
 }
 
-// One marker line with the numbers the lab records. lab.sh parses it from the Job log.
+// One marker line with the whole-run numbers. lab.sh parses it from the Job log.
 export function handleSummary(data) {
   const d = data.metrics.http_req_duration.values;
   const summary = {
