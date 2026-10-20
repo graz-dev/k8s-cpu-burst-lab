@@ -8,6 +8,7 @@ VHS tapes need [vhs](https://github.com/charmbracelet/vhs) on the PATH (`brew in
 
 | Slide | Asset | What it must show | Command | Status |
 |---|---|---|---|---|
+| Resource gap | `gap-chart.png` | CPU used by petclinic over the first 3 minutes, request and limit lines at 1500m, no resize | `./lab.sh capture gap-chart` (Grafana, `compare` peak Pod) | done |
 | Demo 1 | `demo1-compare.mp4` | Three Pods, time to Ready, throttling, RESTARTS 0 for boost | `./lab.sh capture demo1-compare` (VHS + `compare --parallel`) | todo |
 | Demo 2 | `demo2-manual-resize.mp4` | `cpu.max` before and after, conditions, restartCount 0 | `./lab.sh capture demo2-manual-resize` (VHS + `manual-resize`) | todo |
 | Timing | `stabilization-0.png`, `stabilization-30.png` | CPU, limit and throttling ratio around the resize, same scale | `./lab.sh capture stabilization-png` (Grafana, `stabilization` runs A and B) | todo |

@@ -35,6 +35,15 @@ need_vhs() {
 
 asset="${1:-}"
 case "${asset}" in
+  gap-chart)
+    need_python
+    ensure compare
+    f="$(latest compare)"
+    from="$(jq -r '.events.peak_pod_created' "${f}")"
+    to="$(jq -rn --arg t "${from}" '($t | fromdateiso8601) + 180 | todate')"
+    "${PY}" "${ROOT}/capture/grafana.py" --panel cpu --namespace cpu-burst-compare --pod 'petclinic-peak.*' \
+      --from "${from}" --to "${to}" --out "${OUT}/gap-chart.png"
+    ;;
   numbers)
     "${ROOT}/capture/numbers.sh" | tee "${OUT}/numbers.md"
     ;;
@@ -52,7 +61,7 @@ case "${asset}" in
       --results "${f}" --window runs.b_30s.window --height 1000 --out "${OUT}/stabilization-30.png"
     ;;
   *)
-    echo "usage: capture.sh <numbers|demo1-compare|demo2-manual-resize|demo3-stabilization|operator-status|stabilization-png>" >&2
+    echo "usage: capture.sh <gap-chart|numbers|demo1-compare|demo2-manual-resize|demo3-stabilization|operator-status|stabilization-png>" >&2
     exit 1
     ;;
 esac
