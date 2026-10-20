@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MONITORING_NAMESPACE="monitoring"
 CHART_VERSION="92.10.1"   # kube-prometheus-stack
 
-echo "📊  Installing monitoring stack (Prometheus + Grafana)..."
+echo "Installing monitoring stack (Prometheus + Grafana)..."
 echo "    Chart:     prometheus-community/kube-prometheus-stack ${CHART_VERSION}"
 echo "    Namespace: ${MONITORING_NAMESPACE}"
 echo ""
@@ -65,28 +65,20 @@ helm upgrade --install kube-prometheus-stack \
   --wait \
   --timeout 300s
 
-echo "✅  Monitoring stack installed."
+echo "Monitoring stack installed."
 
 # ── Provision the CPU Burst Lab dashboard ──────────────────────────────────────
-# The ConfigMap carries grafana_dashboard=1; the Grafana sidecar watches for
-# this label across all namespaces and imports the dashboard automatically.
-# The dashboard lives in the 'monitoring' namespace — it survives when you
-# delete 'cpu-burst-demo' between implementation runs.
-echo ""
-echo "📈  Provisioning CPU Burst Lab dashboard..."
-kubectl apply -f "${REPO_ROOT}/monitoring/grafana-dashboard.yaml"
-echo "✅  Dashboard provisioned (sidecar will import it within ~30s)."
+# monitoring/dashboard.json is the single source. It is wrapped in a ConfigMap
+# labeled grafana_dashboard=1, which the Grafana sidecar imports from any
+# namespace. The ConfigMap lives in 'monitoring', so it survives when the lab
+# namespaces are deleted.
+echo "Provisioning the CPU Burst Lab dashboard..."
+kubectl create configmap cpu-burst-lab-dashboard \
+  --namespace "${MONITORING_NAMESPACE}" \
+  --from-file=cpu-burst-lab.json="${REPO_ROOT}/monitoring/dashboard.json" \
+  --dry-run=client -o yaml \
+  | kubectl label --local -f - grafana_dashboard=1 app.kubernetes.io/part-of=cpu-burst-lab -o yaml \
+  | kubectl apply -f -
 
 echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Grafana is ready — no port-forward needed.                  ║"
-echo "║                                                              ║"
-echo "║  URL:       http://localhost:3000                            ║"
-echo "║  Username:  admin  |  Password: admin                        ║"
-echo "║  Dashboard: CPU Burst Lab — Startup Resize                   ║"
-echo "║                                                              ║"
-echo "║  Note: the monitoring namespace is independent of            ║"
-echo "║  cpu-burst-demo — Grafana stays up when you delete the       ║"
-echo "║  demo namespace between implementation runs.                 ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo ""
+echo "Grafana: http://localhost:${GRAFANA_HOST_PORT:-3000} (admin / admin), dashboard 'CPU Burst Lab'"
