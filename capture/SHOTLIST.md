@@ -14,4 +14,4 @@ VHS tapes need [vhs](https://github.com/charmbracelet/vhs) on the PATH (`brew in
 | Timing | `stabilization-0.png`, `stabilization-30.png` | CPU, limit and throttling ratio around the resize, same scale | `./lab.sh capture stabilization-png` (Grafana, `stabilization` runs A and B) | todo |
 | Timing / JVM | numbers | Throttling and p95 with vs without `ActiveProcessorCount` | `./lab.sh capture numbers` (after `./lab.sh jvm-cpus`) | todo |
 | Operator | `operator-status.png` | `kubectl get sbp` and the status phases | `./lab.sh capture operator-status` (VHS screenshot) | todo |
-| Demo 3 | `demo3-stabilization.mp4` | Runs A and B with load | `./lab.sh capture demo3-stabilization` (VHS + `stabilization`) | todo |
+| Demo 3 | `demo3-stabilization.mp4`, `demo3-still-1..4.png` | Pod table, policy phases and the narrated runs A and B in a split terminal, at 4x speed | `./lab.sh capture demo3-stabilization` (VHS + tmux + `stabilization`) | done |
