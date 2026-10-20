@@ -1,43 +1,33 @@
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: startup-boost-controller
-  namespace: cpu-burst-demo
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: startup-boost-controller
-  namespace: cpu-burst-demo
 rules:
-  # Read and watch pods to detect Ready transitions.
+  # List Pods and read their conditions.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
-
-  # Submit in-place resize patches via the dedicated subresource (K8s 1.35+ GA).
-  # kubectl patch --subresource=resize does GET then PATCH, so both verbs are required.
+  # kubectl patch --subresource=resize does a GET and then a PATCH on pods/resize.
   - apiGroups: [""]
     resources: ["pods/resize"]
     verbs: ["get", "patch", "update"]
-
-  # Annotate pods after resize (anti-Shrinkage-Trap guard).
+  # Annotate a Pod after it has been resized, so it is not resized twice.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["patch"]
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: startup-boost-controller
-  namespace: cpu-burst-demo
 subjects:
   - kind: ServiceAccount
     name: startup-boost-controller
-    namespace: cpu-burst-demo
 roleRef:
   kind: Role
   name: startup-boost-controller

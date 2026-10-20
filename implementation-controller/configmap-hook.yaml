@@ -2,96 +2,59 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: startup-boost-hook
-  namespace: cpu-burst-demo
 data:
-  # ── controller.sh ─────────────────────────────────────────────────────────
-  # A polling-loop controller: every POLL_INTERVAL seconds it inspects all
-  # pods labelled "startup-boost=enabled", and for any pod that is Ready but
-  # not yet annotated as resized, it submits an in-place resize patch via the
-  # pods/resize subresource (K8s 1.35+ GA).
-  # Runs inside bitnami/kubectl which ships a recent-enough kubectl version
-  # to support --subresource=resize.
+  # Polling controller. Every POLL_INTERVAL seconds it lists the Pods labeled
+  # startup-boost=enabled. A Pod that is Ready, has no resize in flight and has
+  # not been handled yet gets one resize to STEADY_CPU. The resize helpers come
+  # from the shared resize-lib ConfigMap.
   controller.sh: |
     #!/bin/sh
     set -eu
 
-    POLL_INTERVAL="${POLL_INTERVAL:-10}"
+    POLL_INTERVAL="${POLL_INTERVAL:-5}"
     STEADY_CPU="${STEADY_CPU:-300m}"
-    STEADY_MEMORY="${STEADY_MEMORY:-512Mi}"
     CONTAINER_NAME="${CONTAINER_NAME:-petclinic}"
     NAMESPACE="${CONTROLLER_NAMESPACE:-cpu-burst-demo}"
     LABEL_SELECTOR="startup-boost=enabled"
 
-    echo "[controller] Controller started. Polling every ${POLL_INTERVAL}s."
-    echo "[controller] Target: pods{${LABEL_SELECTOR}} in ns ${NAMESPACE}"
-    echo "[controller] Steady-state: cpu=${STEADY_CPU} memory=${STEADY_MEMORY}"
+    RESIZE_LOG_PREFIX="[controller]"
+    # shellcheck source=/dev/null
+    . /lib/resize/resize.sh
 
-    while true; do
-      # List all pods matching the label selector (one name per line).
-      PODS=$(kubectl get pods -n "${NAMESPACE}" \
-        -l "${LABEL_SELECTOR}" \
-        --no-headers \
-        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+    resize_log "started, polling every ${POLL_INTERVAL}s for pods{${LABEL_SELECTOR}} in ${NAMESPACE}, target ${CONTAINER_NAME} cpu=${STEADY_CPU}"
 
-      for POD in ${PODS}; do
-        # Skip if pod name is empty.
-        [ -z "${POD}" ] && continue
+    while :; do
+      pods="$(kubectl get pods -n "${NAMESPACE}" -l "${LABEL_SELECTOR}" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
 
-        # ── Read the key fields we need ──────────────────────────────────
-        READY=$(kubectl get pod "${POD}" -n "${NAMESPACE}" \
-          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' \
-          2>/dev/null || echo "False")
+      for pod in ${pods}; do
+        ready="$(kubectl get pod "${pod}" -n "${NAMESPACE}" \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+        [ "${ready}" = "True" ] || continue
 
-        RESIZED=$(kubectl get pod "${POD}" -n "${NAMESPACE}" \
-          -o jsonpath='{.metadata.annotations.startup-boost\.io/resized}' \
-          2>/dev/null || echo "")
+        handled="$(kubectl get pod "${pod}" -n "${NAMESPACE}" \
+          -o jsonpath='{.metadata.annotations.startup-boost\.io/resized}' 2>/dev/null || true)"
+        [ "${handled}" = "true" ] && continue
 
-        RESIZE_STATUS=$(kubectl get pod "${POD}" -n "${NAMESPACE}" \
-          -o jsonpath='{.status.resize}' \
-          2>/dev/null || echo "")
-
-        # ── Guards ────────────────────────────────────────────────────────
-        if [ "${READY}" != "True" ]; then
+        # A resize is already in flight (PodResizePending or PodResizeInProgress).
+        if ! resize_is_done "${pod}" "${NAMESPACE}" "${CONTAINER_NAME}"; then
+          resize_log "${pod}: resize in flight, skipping"
           continue
         fi
 
-        if [ "${RESIZED}" = "true" ]; then
-          continue   # Shrinkage Trap guard: already processed, skip forever.
-        fi
-
-        if [ -n "${RESIZE_STATUS}" ]; then
-          echo "[controller] ${POD}: resize in progress (${RESIZE_STATUS}), skipping."
+        resize_log "${pod}: Ready, requesting ${CONTAINER_NAME} cpu=${STEADY_CPU}"
+        if ! resize_patch "${pod}" "${NAMESPACE}" "${CONTAINER_NAME}" "${STEADY_CPU}"; then
+          resize_log "${pod}: patch failed, will retry next cycle"
           continue
         fi
 
-        echo "[controller] ${POD}: Ready=True, not yet resized. Triggering downscale..."
-
-        # ── Submit the in-place resize via pods/resize subresource ────────
-        # Only resize CPU — keeping memory limits > memory requests preserves
-        # Burstable QoS. Changing all fields to equal values would flip to
-        # Guaranteed QoS which K8s rejects at resize time.
-        PATCH="{\"spec\":{\"containers\":[{\"name\":\"${CONTAINER_NAME}\",\"resources\":{\"requests\":{\"cpu\":\"${STEADY_CPU}\"},\"limits\":{\"cpu\":\"${STEADY_CPU}\"}}}]}}"
-
-        if kubectl patch pod "${POD}" \
-            -n "${NAMESPACE}" \
-            --subresource=resize \
-            --type=strategic \
-            -p "${PATCH}"; then
-          echo "[controller] ${POD}: resize patch accepted."
-        else
-          echo "[controller] ${POD}: resize patch FAILED — will retry next cycle."
-          continue
-        fi
-
-        # ── Annotate to prevent re-triggering (Shrinkage Trap guard) ─────
-        kubectl annotate pod "${POD}" \
-          -n "${NAMESPACE}" \
+        # Mark the Pod so it is never resized twice.
+        kubectl annotate pod "${pod}" -n "${NAMESPACE}" --overwrite \
           "startup-boost.io/resized=true" \
           "startup-boost.io/resized-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          "startup-boost.io/steady-cpu=${STEADY_CPU}" \
-          --overwrite
+          "startup-boost.io/steady-cpu=${STEADY_CPU}" >/dev/null
 
-        echo "[controller] ${POD}: annotated. Will run at ${STEADY_CPU} CPU."
+        resize_wait "${pod}" "${NAMESPACE}" "${CONTAINER_NAME}" "${STEADY_CPU}" 120 1 || true
       done
 
       sleep "${POLL_INTERVAL}"

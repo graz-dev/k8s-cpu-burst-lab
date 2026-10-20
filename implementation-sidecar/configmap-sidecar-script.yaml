@@ -2,101 +2,46 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: startup-resizer-script
-  namespace: cpu-burst-demo
 data:
   resize.sh: |
-    #!/usr/bin/env sh
-    # resize.sh — Polls the app's readiness endpoint; once healthy, submits
-    # an in-place resize patch to shrink CPU from burst to steady-state.
-    # Runs as a sidecar inside the same pod — shares localhost network.
+    #!/bin/sh
+    # Waits until the app container is Ready, shrinks its CPU in place, then
+    # idles. Runs inside the same Pod as the app. The resize helpers come from
+    # the shared resize-lib ConfigMap.
     set -eu
 
-    STEADY_CPU="${STEADY_CPU:-500m}"
-    STEADY_MEMORY="${STEADY_MEMORY:-512Mi}"
+    STEADY_CPU="${STEADY_CPU:-300m}"
     CONTAINER_NAME="${CONTAINER_NAME:-petclinic}"
-    CHECK_INTERVAL="${CHECK_INTERVAL:-5}"
+    CHECK_INTERVAL="${CHECK_INTERVAL:-2}"
     HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-600}"
 
-    TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
-    CACERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-    API_SERVER="https://kubernetes.default.svc"
-    NAMESPACE="${POD_NAMESPACE}"
-    POD="${POD_NAME}"
+    RESIZE_LOG_PREFIX="[sidecar]"
+    # shellcheck source=/dev/null
+    . /lib/resize/resize.sh
 
-    echo "[resizer] Sidecar started for pod ${POD} in ns ${NAMESPACE}"
-    echo "[resizer] Will downscale '${CONTAINER_NAME}' to cpu=${STEADY_CPU}, memory=${STEADY_MEMORY}"
-    echo "[resizer] Polling kubectl for pod Ready condition every ${CHECK_INTERVAL}s..."
+    resize_log "started for pod ${POD_NAME} in ${POD_NAMESPACE}, target ${CONTAINER_NAME} cpu=${STEADY_CPU}"
 
-    elapsed=0
-    while true; do
-      # Check if the app container is specifically marked Ready by the kubelet.
-      READY=$(kubectl get pod "${POD}" -n "${NAMESPACE}" \
-        -o jsonpath="{.status.containerStatuses[?(@.name=='${CONTAINER_NAME}')].ready}" \
-        2>/dev/null || echo "false")
-
-      if [ "${READY}" = "true" ]; then
-        echo "[resizer] Container '${CONTAINER_NAME}' is Ready. Initiating in-place downscale..."
-        break
-      fi
-
-      if [ "${elapsed}" -ge "${HEALTH_TIMEOUT}" ]; then
-        echo "[resizer] ⚠️  Timeout after ${HEALTH_TIMEOUT}s — aborting resize."
+    deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
+    while :; do
+      ready="$(kubectl get pod "${POD_NAME}" -n "${POD_NAMESPACE}" \
+        -o jsonpath="{.status.containerStatuses[?(@.name==\"${CONTAINER_NAME}\")].ready}" 2>/dev/null || true)"
+      [ "${ready}" = "true" ] && break
+      if [ "$(date +%s)" -ge "${deadline}" ]; then
+        resize_log "timeout after ${HEALTH_TIMEOUT}s waiting for ${CONTAINER_NAME} to be Ready"
         exit 1
       fi
-
-      echo "[resizer] Not ready yet (${elapsed}s elapsed). Retrying in ${CHECK_INTERVAL}s..."
       sleep "${CHECK_INTERVAL}"
-      elapsed=$((elapsed + CHECK_INTERVAL))
     done
 
-    # ── Submit the in-place resize patch ──────────────────────────────────────
-    # Only resize CPU — keeping memory limits > memory requests preserves
-    # Burstable QoS. Changing all resource fields to equal values would flip
-    # to Guaranteed QoS which K8s rejects at resize time.
-    PATCH_BODY=$(cat <<EOF
-    {
-      "spec": {
-        "containers": [{
-          "name": "${CONTAINER_NAME}",
-          "resources": {
-            "requests": { "cpu": "${STEADY_CPU}" },
-            "limits":   { "cpu": "${STEADY_CPU}" }
-          }
-        }]
-      }
-    }
-    EOF
-    )
+    resize_log "${CONTAINER_NAME} is Ready, requesting cpu=${STEADY_CPU}"
+    resize_patch "${POD_NAME}" "${POD_NAMESPACE}" "${CONTAINER_NAME}" "${STEADY_CPU}"
+    resize_log "resize requested"
 
-    # In K8s 1.35+ (GA), in-place resize requires the dedicated pods/resize
-    # subresource — direct PATCH on pods is still blocked by immutability validation.
-    if kubectl patch pod "${POD}" \
-        -n "${NAMESPACE}" \
-        --subresource=resize \
-        --type=strategic \
-        -p "${PATCH_BODY}"; then
-      echo "[resizer] ✅  Resize patch accepted."
+    if resize_wait "${POD_NAME}" "${POD_NAMESPACE}" "${CONTAINER_NAME}" "${STEADY_CPU}" 120 1; then
+      resize_log "done, idling"
     else
-      echo "[resizer] ❌  Patch failed. Check RBAC and feature gate."
+      resize_log "resize did not complete"
       exit 1
     fi
 
-    # ── Wait for kubelet to acknowledge the resize ────────────────────────────
-    echo "[resizer] Waiting for kubelet to apply the resize..."
-    for i in $(seq 1 24); do
-      RESIZE_STATUS=$(kubectl get pod "${POD}" -n "${NAMESPACE}" \
-        -o jsonpath='{.status.resize}' 2>/dev/null || echo "unknown")
-      ALLOC_CPU=$(kubectl get pod "${POD}" -n "${NAMESPACE}" \
-        -o jsonpath='{.status.containerStatuses[0].allocatedResources.cpu}' 2>/dev/null || echo "?")
-
-      echo "[resizer] resize=${RESIZE_STATUS:-complete} allocatedCPU=${ALLOC_CPU}"
-
-      # Empty .status.resize means the resize is fully applied.
-      [ -z "${RESIZE_STATUS}" ] || [ "${RESIZE_STATUS}" = "complete" ] && break
-      sleep 5
-    done
-
-    echo "[resizer] ✅  In-place downscale complete. Pod cpu is now ${STEADY_CPU}."
-    echo "[resizer] Sidecar work done — entering idle mode."
-    # Sleep forever so the pod doesn't get stuck in CrashLoopBackOff.
-    exec sleep infinity
+    while :; do sleep 3600; done

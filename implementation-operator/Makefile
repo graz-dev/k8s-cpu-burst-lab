@@ -1,7 +1,7 @@
 LOCAL_IMAGE ?= startup-boost-operator:local
-REMOTE_IMAGE ?= ghcr.io/graz-dev/startup-boost-operator:latest
+REMOTE_IMAGE ?= ghcr.io/graz-dev/startup-boost-operator:sha-$(shell git rev-parse --short HEAD)
 CLUSTER   ?= cpu-burst-lab
-NAMESPACE ?= cpu-burst-demo
+NAMESPACE ?= cpu-burst-operator
 GOARCH    := $(shell uname -m | sed 's/x86_64/amd64/;s/arm64/arm64/')
 
 .PHONY: help deps build test docker-build kind-load publish deploy deploy-local undeploy
@@ -30,32 +30,19 @@ publish: ## Build and push to GHCR (requires: docker login ghcr.io)
 	docker push $(REMOTE_IMAGE)
 	@echo "✅  Image pushed: $(REMOTE_IMAGE)"
 
-deploy: ## Install operator (CRD + RBAC + controller + app) using the public GHCR image
+deploy: ## Install the operator (CRD, RBAC, manager) using the pinned GHCR image
 	kubectl apply --server-side -k .
-	@echo ""
-	@echo "✅  Operator installed. Now create a StartupBoostPolicy:"
-	@echo "    kubectl apply -f config/samples/startupboostpolicy.yaml"
-	@echo ""
-	@echo "    kubectl get sbp -n $(NAMESPACE)"
-	@echo "    kubectl logs -n $(NAMESPACE) -l app.kubernetes.io/name=startup-boost-operator -f"
+	@echo "Operator installed. Run ./lab.sh operator from the repository root."
 
 deploy-local: kind-load ## Build locally, load into kind, then install (offline / dev use)
 	kubectl apply --server-side -k .
 	kubectl set image deployment/startup-boost-operator manager=$(LOCAL_IMAGE) -n $(NAMESPACE)
 	kubectl patch deployment startup-boost-operator -n $(NAMESPACE) \
 	  -p '{"spec":{"template":{"spec":{"containers":[{"name":"manager","imagePullPolicy":"Never"}]}}}}'
-	@echo ""
-	@echo "✅  Operator installed (local image). Now create a StartupBoostPolicy:"
-	@echo "    kubectl apply -f config/samples/startupboostpolicy.yaml"
 
 undeploy: ## Remove all manifests and the CRD from the cluster
 	kubectl delete -k . --ignore-not-found
 	kubectl delete crd startupboostpolicies.startup.boost.io --ignore-not-found
 
-status: ## Show current policy and pod state
-	@echo "=== StartupBoostPolicy ==="
-	@kubectl get sbp -n $(NAMESPACE) -o wide 2>/dev/null || echo "(not found)"
-	@echo ""
-	@echo "=== Pod resources ==="
-	@kubectl get pod -n $(NAMESPACE) -l app.kubernetes.io/name=petclinic \
-	  -o jsonpath='{range .items[*]}pod={.metadata.name} cpu_req={.spec.containers[0].resources.requests.cpu} allocated={.status.containerStatuses[0].allocatedResources.cpu} restarts={.status.containerStatuses[0].restartCount}{"\n"}{end}' 2>/dev/null || true
+status: ## Show policies and the resources of the managed Pods
+	@kubectl get sbp -A -o wide 2>/dev/null || echo "(no policies)"

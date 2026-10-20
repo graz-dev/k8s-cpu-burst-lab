@@ -1,10 +1,18 @@
+# The petclinic workload, without a VerticalPodAutoscaler.
+# Apply policy/ once the Pod is Ready: a VPA that already has a recommendation
+# makes its admission controller start new Pods at the recommended CPU, which
+# removes the boost.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+namespace: cpu-burst-demo
+
 resources:
-  - namespace.yaml
-  - deployment.yaml
-  # vpa.yaml is applied AFTER the pod becomes Ready — see DOCUMENTATION.md §7.
-  # Applying VPA before the pod starts causes the admission controller to
-  # override the burst CPU (1500m) with its cached recommendation, skipping
-  # the JIT warmup phase entirely.
+  - ../base
+  - ../base/namespace-demo
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+      lab.scenario: vpa
+    includeTemplates: true

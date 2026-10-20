@@ -1,0 +1,17 @@
+# The petclinic workload and its policy for the "operator" pattern.
+# Install the operator first: kubectl apply -k implementation-operator/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cpu-burst-demo
+
+resources:
+  - ../../base
+  - ../../base/namespace-demo
+  - ../config/samples
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+      lab.scenario: operator
+    includeTemplates: true

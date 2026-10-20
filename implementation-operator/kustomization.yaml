@@ -1,3 +1,4 @@
+# Installs the operator cluster-wide: CRD, RBAC and the manager Deployment.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -5,7 +6,11 @@ resources:
   - config/namespace.yaml
   - config/crd/startup.boost.io_startupboostpolicies.yaml
   - config/rbac/serviceaccount.yaml
-  - config/rbac/role.yaml
-  - config/rbac/rolebinding.yaml
+  - config/rbac/clusterrole.yaml
+  - config/rbac/clusterrolebinding.yaml
   - config/manager/deployment.yaml
-  - config/samples/deployment-app.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+    includeTemplates: true
