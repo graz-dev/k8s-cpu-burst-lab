@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cpu-burst-compare
+nameSuffix: -steady
+
+resources:
+  - ../../../base
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+      lab.scenario: compare
+      lab.variant: steady
+    includeSelectors: true
+    includeTemplates: true
+
+patches:
+  # Sized for the steady state from the start: 300m request and limit.
+  - target:
+      kind: Deployment
+      name: petclinic
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 300m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 300m

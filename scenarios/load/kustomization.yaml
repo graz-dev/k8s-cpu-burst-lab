@@ -1,0 +1,20 @@
+# In-cluster load generator. Apply with -n <namespace> after creating the
+# k6-config ConfigMap (TARGET, VUS, DURATION); lab.sh does both.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: k6-script
+    files:
+      - k6-script.js
+
+resources:
+  - k6-job.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+    includeTemplates: true

@@ -1,0 +1,11 @@
+# Three Deployments of the same app. Apply the folders one at a time for fair
+# numbers, or this directory to start all three at once.
+# The boost variant needs the operator: kubectl apply -k implementation-operator/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - steady
+  - peak
+  - boost

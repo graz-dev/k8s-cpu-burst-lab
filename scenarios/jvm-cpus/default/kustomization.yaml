@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cpu-burst-jvm
+nameSuffix: -default
+
+resources:
+  - ../../../base
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+      lab.scenario: jvm-cpus
+      lab.variant: default
+    includeSelectors: true
+    includeTemplates: true
+
+patches:
+  - target:
+      kind: Deployment
+      name: petclinic
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -Xlog:gc+init=info"

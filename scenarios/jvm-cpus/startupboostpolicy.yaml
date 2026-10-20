@@ -1,0 +1,13 @@
+apiVersion: startup.boost.io/v1alpha1
+kind: StartupBoostPolicy
+metadata:
+  name: petclinic
+  namespace: cpu-burst-jvm
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: petclinic
+  containers:
+    - name: petclinic
+      steadyCPU: 300m
+  stabilizationSeconds: 30

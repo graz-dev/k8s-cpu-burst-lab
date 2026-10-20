@@ -1,0 +1,13 @@
+apiVersion: startup.boost.io/v1alpha1
+kind: StartupBoostPolicy
+metadata:
+  name: petclinic
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: petclinic
+      lab.variant: boost
+  containers:
+    - name: petclinic
+      steadyCPU: 300m
+  stabilizationSeconds: 30

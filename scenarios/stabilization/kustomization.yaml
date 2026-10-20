@@ -1,0 +1,16 @@
+# The petclinic workload. The StartupBoostPolicy is applied separately, with
+# stabilizationSeconds 0 and then 30 (see implementation-operator/config/samples).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cpu-burst-stabilization
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+      lab.scenario: stabilization
+    includeTemplates: true
