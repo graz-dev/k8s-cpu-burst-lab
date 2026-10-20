@@ -23,12 +23,12 @@ docker-build: ## Build the container image (local tag)
 
 kind-load: docker-build ## Build and load the local image into the kind cluster
 	kind load docker-image $(LOCAL_IMAGE) --name $(CLUSTER)
-	@echo "✅  Image loaded: $(LOCAL_IMAGE)"
+	@echo "Image loaded: $(LOCAL_IMAGE)"
 
 publish: ## Build and push to GHCR (requires: docker login ghcr.io)
 	docker build -t $(REMOTE_IMAGE) .
 	docker push $(REMOTE_IMAGE)
-	@echo "✅  Image pushed: $(REMOTE_IMAGE)"
+	@echo "Image pushed: $(REMOTE_IMAGE)"
 
 deploy: ## Install the operator (CRD, RBAC, manager) using the pinned GHCR image
 	kubectl apply --server-side -k .
