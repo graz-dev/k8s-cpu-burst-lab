@@ -6,6 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLUSTER_NAME="cpu-burst-lab"
 WORKER_LABEL="demo/role=worker"
+METRICS_SERVER_CHART_VERSION="3.14.0"
 WITH_VPA=false
 WITH_MONITORING=false
 
@@ -31,10 +32,7 @@ check_tool docker
 check_tool helm   # needed for metrics-server & VPA
 
 echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║        CPU Burst Lab — Cluster Bootstrap                     ║"
-echo "║        Kubernetes v1.36 · InPlacePodVerticalScaling GA      ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
+echo "CPU Burst Lab: cluster bootstrap (Kubernetes v1.37, In-Place Pod Resize stable)"
 echo ""
 
 # ── Create the kind cluster ────────────────────────────────────────────────────
@@ -42,10 +40,14 @@ if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
   echo "⚠️   Cluster '${CLUSTER_NAME}' already exists. Skipping creation."
 else
   echo "🔧  Creating kind cluster '${CLUSTER_NAME}'..."
+  # GRAFANA_HOST_PORT overrides the host port mapped to Grafana (default 3000).
+  KIND_CONFIG="$(mktemp)"
+  sed "s/hostPort: 3000/hostPort: ${GRAFANA_HOST_PORT:-3000}/" "${REPO_ROOT}/kind-config.yaml" > "${KIND_CONFIG}"
   kind create cluster \
     --name "${CLUSTER_NAME}" \
-    --config "${REPO_ROOT}/kind-config.yaml" \
+    --config "${KIND_CONFIG}" \
     --wait 120s
+  rm -f "${KIND_CONFIG}"
   echo "✅  Cluster created."
 fi
 
@@ -62,14 +64,9 @@ WORKER_NODE="$(kubectl get nodes --no-headers \
 kubectl label node "${WORKER_NODE}" demo/role=worker --overwrite
 echo "    Worker node: ${WORKER_NODE}"
 
-# ── Verify InPlacePodVerticalScaling feature gate ─────────────────────────────
+# ── Report the server version ──────────────────────────────────────────────────
 echo ""
-echo "🔍  Verifying InPlacePodVerticalScaling feature gate..."
-KUBE_VERSION=$(kubectl version --output=json 2>/dev/null | \
-  python3 -c "import sys,json; d=json.load(sys.stdin); print(d['serverVersion']['gitVersion'])" 2>/dev/null || \
-  kubectl version --short 2>/dev/null | grep Server | awk '{print $3}')
-echo "    Server version: ${KUBE_VERSION}"
-echo "    Feature gate: InPlacePodVerticalScaling=true (GA since v1.35)"
+echo "Server version: $(kubectl version -o json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['serverVersion']['gitVersion'])")"
 
 # ── Install metrics-server ─────────────────────────────────────────────────────
 echo ""
@@ -77,6 +74,7 @@ echo "📊  Installing metrics-server (needed for kubectl top)..."
 helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update &>/dev/null
 helm upgrade --install metrics-server metrics-server/metrics-server \
   --namespace kube-system \
+  --version "${METRICS_SERVER_CHART_VERSION}" \
   --set args="{--kubelet-insecure-tls}" \
   --wait \
   --timeout 120s
@@ -97,20 +95,4 @@ fi
 
 # ── Summary ────────────────────────────────────────────────────────────────────
 echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Cluster ready! Next steps:                                  ║"
-echo "║                                                              ║"
-echo "║  Sidecar demo:                                               ║"
-echo "║    kubectl apply -k implementation-sidecar/                  ║"
-echo "║                                                              ║"
-echo "║  Deployment demo:                                            ║"
-echo "║    kubectl apply -k implementation-deployment/               ║"
-echo "║                                                              ║"
-echo "║  VPA demo (requires --with-vpa flag):                        ║"
-echo "║    kubectl apply -k implementation-vpa/                      ║"
-echo "║                                                              ║"
-echo "║  Grafana (requires --with-monitoring flag):                  ║"
-echo "║    http://localhost:3000  (admin / admin)                    ║"
-echo "║    no port-forward needed — NodePort mapped by kind          ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo ""
+echo "Cluster ready. Run a pattern with ./lab.sh sidecar|controller|operator|vpa"

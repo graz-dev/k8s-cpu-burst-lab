@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MONITORING_NAMESPACE="monitoring"
-CHART_VERSION="84.5.0"   # kube-prometheus-stack; bump if a newer stable is available
+CHART_VERSION="92.10.1"   # kube-prometheus-stack
 
 echo "📊  Installing monitoring stack (Prometheus + Grafana)..."
 echo "    Chart:     prometheus-community/kube-prometheus-stack ${CHART_VERSION}"
