@@ -1,11 +1,11 @@
 # Run from the repository root: vhs capture/tapes/demo1-compare.tape
-Output capture/out/demo1-compare.mp4
-Output capture/out/demo1-compare.gif
+Output "capture/out/demo1-compare.mp4"
+Output "capture/out/demo1-compare.gif"
 
 Set Shell "bash"
 Set Width 1920
 Set Height 1080
-Set FontSize 30
+Set FontSize 24
 Set Theme "Catppuccin Mocha"
 Set Padding 30
 Set TypingSpeed 35ms

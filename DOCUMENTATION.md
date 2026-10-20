@@ -198,7 +198,8 @@ Two boost Deployments that differ only in `-XX:ActiveProcessorCount=1`. Both sta
 
 ```bash
 ./lab.sh watch [namespace]   # refreshing table, one row per Pod
-./lab.sh results             # latest measurements as markdown
+./lab.sh results             # terminal UI over results/ (j/k run, J/K scroll, t raw JSON, q quit)
+./lab.sh results --md        # latest run of every scenario as markdown
 ```
 
 ```
@@ -225,6 +226,8 @@ petclinic-boost-5b98fbf67b-pqsnq Running  true  300m     300m       0        75
 ## 9. Results
 
 Each run writes `results/<scenario>-<YYYYmmdd-HHMMSS>.json` (raw, with `events` timestamps and the scenario's measurements) and appends a row to `results/<scenario>.md`. The folder is gitignored.
+
+`./lab.sh results` opens a terminal UI (`scripts/results-tui.py`, Python standard library only): runs on the left, grouped by scenario with the newest first, and a view of the selected run on the right, with tables and bars for the numbers and the timeline of events. Piped or redirected, it prints the latest run of every scenario as plain text.
 
 Timing values that come from Pod conditions have a resolution of one second. A value that was not measured is `TBD`; no number in this repository is estimated.
 

@@ -35,15 +35,6 @@ need_vhs() {
 
 asset="${1:-}"
 case "${asset}" in
-  gap-chart)
-    need_python
-    ensure compare
-    f="$(latest compare)"
-    from="$(jq -r '.events.peak_pod_created' "${f}")"
-    to="$(jq -rn --arg t "${from}" '($t | fromdateiso8601) + 180 | todate')"
-    "${PY}" "${ROOT}/capture/grafana.py" --panel cpu --namespace cpu-burst-compare --pod 'petclinic-peak.*' \
-      --from "${from}" --to "${to}" --out "${OUT}/gap-chart.png"
-    ;;
   numbers)
     "${ROOT}/capture/numbers.sh" | tee "${OUT}/numbers.md"
     ;;
@@ -55,17 +46,13 @@ case "${asset}" in
     need_python
     ensure stabilization
     f="$(latest stabilization)"
-    "${PY}" "${ROOT}/capture/grafana.py" --panel dashboard --namespace cpu-burst-stabilization --pod 'petclinic.*' \
+    "${PY}" "${ROOT}/capture/grafana.py" --panel dashboard --namespace cpu-burst-stabilization --pod "$(jq -r .runs.a_0s.pod "${f}")" \
       --results "${f}" --window runs.a_0s.window --height 1000 --out "${OUT}/stabilization-0.png"
-    "${PY}" "${ROOT}/capture/grafana.py" --panel dashboard --namespace cpu-burst-stabilization --pod 'petclinic.*' \
+    "${PY}" "${ROOT}/capture/grafana.py" --panel dashboard --namespace cpu-burst-stabilization --pod "$(jq -r .runs.b_30s.pod "${f}")" \
       --results "${f}" --window runs.b_30s.window --height 1000 --out "${OUT}/stabilization-30.png"
     ;;
-  jdk-8359211)
-    need_python
-    "${PY}" "${ROOT}/capture/web.py" --url https://bugs.openjdk.org/browse/JDK-8359211 --out "${OUT}/jdk-8359211.png"
-    ;;
   *)
-    echo "usage: capture.sh <gap-chart|numbers|demo1-compare|demo2-manual-resize|demo3-stabilization|operator-status|stabilization-png|jdk-8359211>" >&2
+    echo "usage: capture.sh <numbers|demo1-compare|demo2-manual-resize|demo3-stabilization|operator-status|stabilization-png>" >&2
     exit 1
     ;;
 esac

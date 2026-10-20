@@ -52,7 +52,7 @@ Demos and measurements
 
 Observe
   watch [namespace] [--once]  live table of Pods
-  results                     latest measurements as markdown
+  results [--md]              browse measurements (interactive); --md prints markdown
 
 Environment
   PAUSE=1                     wait for Enter before every step
@@ -87,6 +87,10 @@ cmd_reset() {
 }
 
 cmd_results() {
+  if [ "${1:-}" != "--md" ]; then
+    require_tool python3
+    exec python3 "${REPO_ROOT}/scripts/results-tui.py" "${RESULTS_DIR}"
+  fi
   require_tool jq
   local f listing
   if ! ls "${RESULTS_DIR}"/*.json >/dev/null 2>&1; then
@@ -114,7 +118,7 @@ main() {
     stabilization) run_stabilization ;;
     jvm-cpus) run_jvm_cpus ;;
     watch) run_watch "$@" ;;
-    results) cmd_results ;;
+    results) cmd_results "$@" ;;
     capture) "${REPO_ROOT}/capture/capture.sh" "$@" ;; # TEMP-CAPTURE
     help | -h | --help) usage ;;
     *)

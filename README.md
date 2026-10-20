@@ -62,7 +62,7 @@ Grafana is at http://localhost:3000 (`admin` / `admin`), dashboard **CPU Burst L
 | `./lab.sh stabilization` | Operator shrinking right at Ready vs after a delay, under load |
 | `./lab.sh jvm-cpus` | JVM thread pools sized at boost time vs pinned with `-XX:ActiveProcessorCount` |
 | `./lab.sh watch` | Live table of Pods with CPU spec, actual CPU, restarts and throttling |
-| `./lab.sh results` | Latest measurements as a markdown table |
+| `./lab.sh results` | Browse the measurements in a terminal UI (`--md` prints markdown) |
 
 Set `PAUSE=1` to stop between steps. Results are written to `results/`.
 

@@ -1,11 +1,11 @@
 # Run from the repository root: vhs capture/tapes/demo3-stabilization.tape
-Output capture/out/demo3-stabilization.mp4
-Output capture/out/demo3-stabilization.gif
+Output "capture/out/demo3-stabilization.mp4"
+Output "capture/out/demo3-stabilization.gif"
 
 Set Shell "bash"
 Set Width 1920
 Set Height 1080
-Set FontSize 30
+Set FontSize 24
 Set Theme "Catppuccin Mocha"
 Set Padding 30
 Set TypingSpeed 35ms
@@ -16,7 +16,7 @@ Type "export PS1='$ ' && clear"
 Enter
 Show
 
-Type "./lab.sh stabilization"
+Type "./lab.sh stabilization; echo DO''NE"
 Enter
-Wait+Screen@30m /b_30s \|/
+Wait+Screen@40m /DONE/
 Sleep 8s
