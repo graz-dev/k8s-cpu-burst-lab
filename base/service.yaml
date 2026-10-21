@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: petclinic
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: petclinic
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

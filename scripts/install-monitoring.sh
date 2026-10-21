@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# install-monitoring.sh — Install Prometheus + Grafana (kube-prometheus-stack)
+# install-monitoring.sh - Install Prometheus + Grafana (kube-prometheus-stack)
 # and provision the CPU Burst Lab dashboard automatically via the Grafana sidecar.
 #
 # Grafana is exposed as NodePort 30300, which kind maps to localhost:3000 via
-# the extraPortMappings in kind-config.yaml — no kubectl port-forward needed.
+# the extraPortMappings in kind-config.yaml - no kubectl port-forward needed.
 #
 # Requires: helm, kubectl, cluster created with kind-config.yaml.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MONITORING_NAMESPACE="monitoring"
-CHART_VERSION="84.5.0"   # kube-prometheus-stack; bump if a newer stable is available
+CHART_VERSION="92.10.1"   # kube-prometheus-stack
 
-echo "📊  Installing monitoring stack (Prometheus + Grafana)..."
+echo "Installing monitoring stack (Prometheus + Grafana)..."
 echo "    Chart:     prometheus-community/kube-prometheus-stack ${CHART_VERSION}"
 echo "    Namespace: ${MONITORING_NAMESPACE}"
 echo ""
@@ -23,9 +23,9 @@ helm repo add prometheus-community \
 
 # ── Install kube-prometheus-stack ──────────────────────────────────────────────
 # Key settings for a 4-CPU kind cluster:
-#   alertmanager disabled    — not needed for a demo
-#   default dashboards off   — we provision our own via the sidecar ConfigMap
-#   scrapeInterval=5s        — default 60s is too coarse to see the resize dip
+#   alertmanager disabled    - not needed for a demo
+#   default dashboards off   - we provision our own via the sidecar ConfigMap
+#   scrapeInterval=5s        - default 60s is too coarse to see the resize dip
 #   grafana.service.type=NodePort + nodePort=30300
 #     → kind maps containerPort 30300 → hostPort 3000 (see kind-config.yaml)
 #     → Grafana is available at http://localhost:3000 without port-forward
@@ -44,16 +44,16 @@ helm upgrade --install kube-prometheus-stack \
   --set grafana.sidecar.dashboards.searchNamespace=ALL \
   --set grafana.persistence.enabled=false \
   --set "grafana.resources.requests.cpu=50m" \
-  --set "grafana.resources.requests.memory=128Mi" \
+  --set "grafana.resources.requests.memory=256Mi" \
   --set "grafana.resources.limits.cpu=200m" \
-  --set "grafana.resources.limits.memory=256Mi" \
+  --set "grafana.resources.limits.memory=512Mi" \
   --set prometheus.prometheusSpec.retention=2h \
   --set prometheus.prometheusSpec.scrapeInterval=5s \
   --set prometheus.prometheusSpec.evaluationInterval=5s \
   --set "prometheus.prometheusSpec.resources.requests.cpu=100m" \
-  --set "prometheus.prometheusSpec.resources.requests.memory=256Mi" \
+  --set "prometheus.prometheusSpec.resources.requests.memory=512Mi" \
   --set "prometheus.prometheusSpec.resources.limits.cpu=500m" \
-  --set "prometheus.prometheusSpec.resources.limits.memory=512Mi" \
+  --set "prometheus.prometheusSpec.resources.limits.memory=1536Mi" \
   --set "kube-state-metrics.resources.requests.cpu=10m" \
   --set "kube-state-metrics.resources.requests.memory=32Mi" \
   --set "kube-state-metrics.resources.limits.cpu=50m" \
@@ -65,28 +65,20 @@ helm upgrade --install kube-prometheus-stack \
   --wait \
   --timeout 300s
 
-echo "✅  Monitoring stack installed."
+echo "Monitoring stack installed."
 
 # ── Provision the CPU Burst Lab dashboard ──────────────────────────────────────
-# The ConfigMap carries grafana_dashboard=1; the Grafana sidecar watches for
-# this label across all namespaces and imports the dashboard automatically.
-# The dashboard lives in the 'monitoring' namespace — it survives when you
-# delete 'cpu-burst-demo' between implementation runs.
-echo ""
-echo "📈  Provisioning CPU Burst Lab dashboard..."
-kubectl apply -f "${REPO_ROOT}/monitoring/grafana-dashboard.yaml"
-echo "✅  Dashboard provisioned (sidecar will import it within ~30s)."
+# monitoring/dashboard.json is the single source. It is wrapped in a ConfigMap
+# labeled grafana_dashboard=1, which the Grafana sidecar imports from any
+# namespace. The ConfigMap lives in 'monitoring', so it survives when the lab
+# namespaces are deleted.
+echo "Provisioning the CPU Burst Lab dashboard..."
+kubectl create configmap cpu-burst-lab-dashboard \
+  --namespace "${MONITORING_NAMESPACE}" \
+  --from-file=cpu-burst-lab.json="${REPO_ROOT}/monitoring/dashboard.json" \
+  --dry-run=client -o yaml \
+  | kubectl label --local -f - grafana_dashboard=1 app.kubernetes.io/part-of=cpu-burst-lab -o yaml \
+  | kubectl apply -f -
 
 echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Grafana is ready — no port-forward needed.                  ║"
-echo "║                                                              ║"
-echo "║  URL:       http://localhost:3000                            ║"
-echo "║  Username:  admin  |  Password: admin                        ║"
-echo "║  Dashboard: CPU Burst Lab — Startup Resize                   ║"
-echo "║                                                              ║"
-echo "║  Note: the monitoring namespace is independent of            ║"
-echo "║  cpu-burst-demo — Grafana stays up when you delete the       ║"
-echo "║  demo namespace between implementation runs.                 ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo ""
+echo "Grafana: http://localhost:${GRAFANA_HOST_PORT:-3000} (admin / admin), dashboard 'CPU Burst Lab'"

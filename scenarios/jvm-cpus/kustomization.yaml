@@ -1,0 +1,11 @@
+# Two boost Deployments, identical except for -XX:ActiveProcessorCount=1.
+# Both log the processor count the JVM detected (gc+init). The operator resizes
+# both to 300m, so it must be installed: kubectl apply -k implementation-operator/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - default
+  - cpus1
+  - startupboostpolicy.yaml

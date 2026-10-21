@@ -1,0 +1,26 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: startup-boost-operator
+rules:
+  # The policies the operator reconciles.
+  - apiGroups: ["startup.boost.io"]
+    resources: ["startupboostpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["startup.boost.io"]
+    resources: ["startupboostpolicies/status"]
+    verbs: ["get", "update", "patch"]
+  # Watch Pods and annotate them after a resize.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch"]
+  # The resize subresource. The client reads the Pod before patching it.
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

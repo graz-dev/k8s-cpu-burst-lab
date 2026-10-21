@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petclinic
+spec:
+  template:
+    spec:
+      serviceAccountName: startup-resizer
+      volumes:
+        - name: resizer-script
+          configMap:
+            name: startup-resizer-script
+            defaultMode: 0755
+        - name: resize-lib
+          configMap:
+            name: resize-lib
+      containers:
+        - name: startup-resizer
+          image: alpine/k8s:1.37.1
+          command: ["/bin/sh", "/scripts/resize.sh"]
+          volumeMounts:
+            - name: resizer-script
+              mountPath: /scripts
+            - name: resize-lib
+              mountPath: /lib/resize
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONTAINER_NAME
+              value: petclinic
+            - name: STEADY_CPU
+              value: 300m
+            - name: CHECK_INTERVAL
+              value: "2"
+            - name: HEALTH_TIMEOUT
+              value: "600"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

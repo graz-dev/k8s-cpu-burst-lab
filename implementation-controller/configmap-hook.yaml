@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: startup-boost-hook
+data:
+  # Polling controller. Every POLL_INTERVAL seconds it lists the Pods labeled
+  # startup-boost=enabled. A Pod that is Ready, has no resize in flight and has
+  # not been handled yet gets one resize to STEADY_CPU. The resize helpers come
+  # from the shared resize-lib ConfigMap.
+  controller.sh: |
+    #!/bin/sh
+    set -eu
+
+    POLL_INTERVAL="${POLL_INTERVAL:-5}"
+    STEADY_CPU="${STEADY_CPU:-300m}"
+    CONTAINER_NAME="${CONTAINER_NAME:-petclinic}"
+    NAMESPACE="${CONTROLLER_NAMESPACE:-cpu-burst-demo}"
+    LABEL_SELECTOR="startup-boost=enabled"
+
+    RESIZE_LOG_PREFIX="[controller]"
+    # shellcheck source=/dev/null
+    . /lib/resize/resize.sh
+
+    resize_log "started, polling every ${POLL_INTERVAL}s for pods{${LABEL_SELECTOR}} in ${NAMESPACE}, target ${CONTAINER_NAME} cpu=${STEADY_CPU}"
+
+    while :; do
+      pods="$(kubectl get pods -n "${NAMESPACE}" -l "${LABEL_SELECTOR}" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+
+      for pod in ${pods}; do
+        ready="$(kubectl get pod "${pod}" -n "${NAMESPACE}" \
+          -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+        [ "${ready}" = "True" ] || continue
+
+        handled="$(kubectl get pod "${pod}" -n "${NAMESPACE}" \
+          -o jsonpath='{.metadata.annotations.startup-boost\.io/resized}' 2>/dev/null || true)"
+        [ "${handled}" = "true" ] && continue
+
+        # A resize is already in flight (PodResizePending or PodResizeInProgress).
+        if ! resize_is_done "${pod}" "${NAMESPACE}" "${CONTAINER_NAME}"; then
+          resize_log "${pod}: resize in flight, skipping"
+          continue
+        fi
+
+        resize_log "${pod}: Ready, requesting ${CONTAINER_NAME} cpu=${STEADY_CPU}"
+        if ! resize_patch "${pod}" "${NAMESPACE}" "${CONTAINER_NAME}" "${STEADY_CPU}"; then
+          resize_log "${pod}: patch failed, will retry next cycle"
+          continue
+        fi
+
+        # Mark the Pod so it is never resized twice.
+        kubectl annotate pod "${pod}" -n "${NAMESPACE}" --overwrite \
+          "startup-boost.io/resized=true" \
+          "startup-boost.io/resized-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          "startup-boost.io/steady-cpu=${STEADY_CPU}" >/dev/null
+
+        resize_wait "${pod}" "${NAMESPACE}" "${CONTAINER_NAME}" "${STEADY_CPU}" 120 1 || true
+      done
+
+      sleep "${POLL_INTERVAL}"
+    done

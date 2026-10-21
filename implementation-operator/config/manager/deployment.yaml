@@ -2,10 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: startup-boost-operator
-  namespace: cpu-burst-demo
+  namespace: cpu-burst-operator
   labels:
     app.kubernetes.io/name: startup-boost-operator
-    demo/implementation: operator
 spec:
   replicas: 1
   selector:
@@ -23,14 +22,8 @@ spec:
 
       containers:
         - name: manager
-          image: ghcr.io/graz-dev/startup-boost-operator:latest
+          image: ghcr.io/graz-dev/startup-boost-operator:sha-84e5843
           imagePullPolicy: IfNotPresent
-
-          env:
-            - name: WATCH_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
 
           command: ["/manager"]
           args:

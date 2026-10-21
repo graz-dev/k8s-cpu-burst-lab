@@ -1,167 +1,42 @@
-# Implementation 4 — Custom Kubernetes Operator with CRD
+# Operator
 
-This implementation builds a purpose-built Kubernetes controller that extends the cluster API with a `StartupBoostPolicy` custom resource. It is the most production-grade approach in this lab: event-driven, self-documenting, and observable through standard Kubernetes tooling.
+The `StartupBoostPolicy` operator watches Pods and shrinks them in place, with an optional delay after Ready.
 
-## Why a CRD operator?
+## How it works
 
-The three previous implementations trade off expressiveness, invasiveness, and latency in different ways:
+1. Install the operator once: CRD `startupboostpolicies.startup.boost.io`, a ClusterRole, and the manager Deployment in `cpu-burst-operator`.
+2. A `StartupBoostPolicy` in a workload's namespace selects Pods by label and names the container and its `steadyCPU`.
+3. The operator reconciles on Pod events. A matching Pod reports phase `Burst` until it is Ready.
+4. Once the Pod has been Ready for `stabilizationSeconds` (default 0), the operator patches the `resize` subresource and annotates the Pod. The phase becomes `Ready` while it waits and `Steady` after the patch.
+5. The app container is never restarted.
 
-| Approach | Trigger | Cluster scope | User-facing API |
-|---|---|---|---|
-| Sidecar | Poll every 5 s | Per-pod sidecar | Annotation on Pod |
-| Simple operator | Poll every 10 s | Cluster-wide | Annotation on Deployment |
-| VPA | Recommender interval | Cluster-wide | VerticalPodAutoscaler object |
-| **CRD operator** | **Pod event** | **Namespace-scoped** | **StartupBoostPolicy object** |
-
-### Key design choices
-
-**Event-driven reconciliation, not polling.**
-The controller registers a `Watches` hook on `corev1.Pod` events. When any pod in the namespace changes state, `mapPodToPolicy` translates the pod event into a reconcile request for the matching policy. The work queue in controller-runtime deduplicates concurrent events, so a noisy pod (many condition updates during startup) triggers at most one reconcile pass at a time. The resize fires within milliseconds of the pod's `Ready` condition transitioning to `True`.
-
-**Status subresource on the CRD.**
-`StartupBoostPolicy` exposes a `/status` subresource. The controller writes per-pod phase information (`Burst → Ready → Steady`) back to the object status. You can watch the full lifecycle with `kubectl get sbp -w` without tailing logs.
-
-**Idempotency via pod annotation.**
-Once the resize succeeds, the controller stamps `startup.boost.io/resized: "true"` on the pod. Subsequent reconcile passes skip that pod immediately, without issuing any API server calls beyond the initial cache read.
-
-**QoS class preservation.**
-The resize patch changes only CPU requests and limits. Memory is intentionally left at its original value. Kubernetes rejects any resize that would change a pod's QoS class (Burstable → Guaranteed), so touching memory would make the patch fail for most real workloads.
-
-**`pods/resize` subresource.**
-In Kubernetes 1.35 (GA) the in-place resize path requires patching `pods/<name>/resize`, not the pod directly. Direct PATCH on the pod endpoint is rejected by the immutability webhook even with `InPlacePodVerticalScaling` enabled. The controller uses `r.SubResource("resize").Patch(...)` from controller-runtime, which routes to the correct endpoint automatically.
-
-**Stabilization window.**
-`spec.stabilizationSeconds` delays the resize after `Ready`. This is useful when a readiness probe is configured to fire slightly before the JVM has finished class-loading (common in Spring Boot apps with actuator probes). Set it to `0` (the default) for immediate resize.
-
----
-
-## Repository layout
-
-```
-implementation-operator/
-├── api/v1alpha1/
-│   ├── groupversion_info.go          # GVK registration
-│   ├── startupboostpolicy_types.go   # CRD Go types
-│   └── zz_generated.deepcopy.go     # DeepCopy methods
-├── cmd/main.go                       # Manager entry point
-├── internal/controller/
-│   └── startupboostpolicy_controller.go  # Reconciler
-├── config/
-│   ├── namespace.yaml
-│   ├── crd/startup.boost.io_startupboostpolicies.yaml
-│   ├── rbac/                         # ServiceAccount, Role, RoleBinding
-│   ├── manager/deployment.yaml       # Operator deployment
-│   └── samples/
-│       ├── deployment-app.yaml       # Spring PetClinic with burst CPU
-│       └── startupboostpolicy.yaml   # Sample CRD instance
-├── Dockerfile                        # Multi-stage: golang:1.23 → distroless
-├── Makefile
-└── kustomization.yaml
-```
-
----
-
-## Prerequisites
-
-- `kind` cluster created with `scripts/setup-cluster.sh` (no extra flags needed)
-- `kubectl` configured to point at the cluster (`kind-cpu-burst-lab` context)
-
-No local Docker build required — the operator image is published to GHCR by CI and pulled automatically.
-
----
-
-## Running the demo
-
-The install follows the same pattern as real operators: infrastructure first, then user configuration.
-
-**Step 1 — Install the operator** (CRD + RBAC + controller + app):
+## Run
 
 ```bash
-kubectl apply --server-side -k implementation-operator/
+./lab.sh operator
 ```
 
-**Step 2 — Create a `StartupBoostPolicy`** for the petclinic workload:
+Or by hand:
 
 ```bash
-kubectl apply -f implementation-operator/config/samples/startupboostpolicy.yaml
+kubectl apply -k implementation-operator/         # operator
+kubectl apply -k implementation-operator/demo/    # petclinic and a policy
+kubectl get sbp -n cpu-burst-demo -o wide
 ```
 
-The kustomization intentionally does not bundle the CR instance. Server-side apply registers the CRD schema and all other resources in one shot without any race condition, because only creating *instances* of a CRD requires it to be `Established` — registering the schema itself does not.
+`config/samples/startupboostpolicy-stabilized.yaml` sets `stabilizationSeconds: 30`.
 
-### Watch the operator
+## RBAC
 
-```bash
-# Operator logs (event-driven reconcile loop)
-kubectl logs -n cpu-burst-demo -l app.kubernetes.io/name=startup-boost-operator -f
+A ClusterRole bound to the operator's ServiceAccount: `get`, `list`, `watch`, `patch` on Pods, `get`, `patch`, `update` on `pods/resize`, `get`, `list`, `watch` on policies and `get`, `update`, `patch` on their status, plus events and leases (`config/rbac/`). It watches every namespace, so one operator serves all of them.
 
-# CRD status — shows per-pod phase
-kubectl get sbp -n cpu-burst-demo
-kubectl describe sbp petclinic-boost -n cpu-burst-demo
+## Early-shrink behavior
 
-# Pod annotations stamped by the operator
-kubectl get pod -n cpu-burst-demo -l app.kubernetes.io/name=petclinic \
-  -o jsonpath='{range .items[*]}{.metadata.name}: resized={.metadata.annotations.startup\.boost\.io/resized} steadyCPU={.metadata.annotations.startup\.boost\.io/steady-cpu}{"\n"}{end}'
+Low, and tunable. `stabilizationSeconds` is the only delay setting in the four patterns. It is a fixed wait after Ready, not a check that the runtime is warm.
 
-# Allocated CPU (updates after resize is accepted)
-kubectl get pod -n cpu-burst-demo -l app.kubernetes.io/name=petclinic \
-  -o jsonpath='{range .items[*]}pod={.metadata.name} req={.spec.containers[0].resources.requests.cpu} allocated={.status.containerStatuses[0].allocatedResources.cpu}{"\n"}{end}'
-```
+## Limitations
 
-### Expected lifecycle
-
-```
-startup-boost-operator: Reconcile triggered — policy petclinic-boost, 1 pod(s)
-startup-boost-operator: Pod is Ready — applying in-place resize  pod=petclinic-xxx
-startup-boost-operator: Resize complete  pod=petclinic-xxx  steadyCPU=300m
-```
-
-`kubectl get sbp -n cpu-burst-demo` output:
-
-```
-NAME              SELECTOR                          STEADYCPU   AGE
-petclinic-boost   map[app.kubernetes.io/name:petclinic]   300m        45s
-```
-
-`kubectl describe sbp petclinic-boost -n cpu-burst-demo` status section:
-
-```yaml
-Status:
-  Boosted Pods:
-    Name:       petclinic-6d4f...
-    Phase:      Steady
-    Resized At: 2026-05-05T10:23:41Z
-    Steady CPU: 300m
-  Conditions:
-    - Type:    Ready
-      Status:  True
-      Reason:  Reconciled
-      Message: Managing 1 pod(s)
-```
-
----
-
-## Cleanup
-
-```bash
-kubectl delete namespace cpu-burst-demo --ignore-not-found
-kubectl delete crd startupboostpolicies.startup.boost.io --ignore-not-found
-```
-
----
-
-## Development notes
-
-If you have Go installed locally:
-
-```bash
-# Download dependencies and generate go.sum
-make deps   # runs: go mod tidy
-
-# Compile the manager binary locally (useful for fast iteration)
-make build  # output: bin/manager
-
-# Run unit tests
-make test
-```
-
-The Docker build uses `GONOSUMDB=*` and `-mod=mod` so it works without a pre-generated `go.sum` in the repository. Running `make deps` locally generates `go.sum` which can then be committed for reproducible hermetic builds.
+- A CRD and a cluster-wide role to install and keep.
+- The policy phase `Steady` is set when the API server accepts the resize patch, not when the kubelet finishes. `lab.sh` checks the Pod conditions and `status.containerStatuses[].resources` itself.
+- The operator image is built from this repository by CI and pinned by tag in `config/manager/deployment.yaml`.
+- Controller-runtime and the CRD types are in `api/`, `cmd/` and `internal/`; `make` targets in this folder build and load a local image.

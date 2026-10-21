@@ -1,797 +1,333 @@
-# Demo Lab — Detailed Documentation
+# CPU Burst Lab: documentation
 
-> **Talk**: "Stop Overprovisioning for Application Startup"
-> **Topic**: Kubernetes In-Place Pod Vertical Scaling (KEP-1287, GA in v1.35)
-> **Goal**: Show four concrete ways to give a JVM its CPU burst at startup, then reclaim it without restarting the container.
+A longer walkthrough of the lab. The [README](README.md) has the short version.
 
----
+## Contents
 
-## Table of Contents
-
-1. [Background — Why This Demo Exists](#1-background)
-2. [Prerequisites](#2-prerequisites)
-3. [Application Image](#3-application-image)
-4. [Create the Cluster](#4-create-the-cluster)
-5. [Implementation 1 — Sidecar](#5-implementation-1--sidecar)
-6. [Implementation 2 — Deployment](#6-implementation-2--deployment)
-7. [Implementation 3 — VPA](#7-implementation-3--vpa)
-8. [Implementation 4 — Operator](#8-implementation-4--operator)
-9. [Switching Between Implementations](#9-switching-between-implementations)
-10. [Observability Cheat Sheet](#10-observability-cheat-sheet)
+1. [Background](#1-background)
+2. [Requirements](#2-requirements)
+3. [Repository layout](#3-repository-layout)
+4. [Bring the lab up](#4-bring-the-lab-up)
+5. [How a resize is detected](#5-how-a-resize-is-detected)
+6. [The four patterns](#6-the-four-patterns)
+7. [Scenarios](#7-scenarios)
+8. [Dashboard](#8-dashboard)
+9. [Results](#9-results)
+10. [Observability cheat sheet](#10-observability-cheat-sheet)
 11. [Troubleshooting](#11-troubleshooting)
-12. [Key API Concepts](#12-key-api-concepts)
+12. [API concepts](#12-api-concepts)
 13. [Teardown](#13-teardown)
 
 ---
 
 ## 1. Background
 
-### The JVM Startup Burst Problem
+Many runtimes need more CPU while they start than once they are warm. A JVM loads and verifies classes, compiles hot methods with the JIT, initializes the heap and runs the application's bootstrap code. Spring Petclinic, the app in this lab, is no exception.
 
-Modern JVMs do intensive work at startup that they never repeat at steady state:
-- **Class loading and bytecode verification** — every `.class` file in the classpath
-- **JIT compilation** — the C1 (client) compiler fires immediately, C2 (server) compiles hot methods after profiling
-- **GC heap initialization** — G1GC pre-allocates regions and starts background threads
-- **Spring context bootstrap** — bean instantiation, AOP proxy generation, autoconfiguration
+A Pod has two ways to be sized, and both cost something:
 
-This creates a sharp, short-lived CPU spike (the **Startup Burst**) followed by a long steady state where the original allocation sits mostly idle:
-
-```
-CPU usage
-│
-1500m ┤   ████
-      │   ████   JIT / C2 warmup (class loading + hot-path compilation)
- 800m ┤   ████
-      │   ████  ╲
- 300m ┤   ████   ╲___________________________________  Steady-state
-      │   ████
-      └──────────────────────────────────────────────── Time
-         0s  30s  60s  90s  120s
-         │← Burst window (~60–90s) →│← Steady state ─────────────────
-```
-
-### The Traditional Options (and Why They Fail)
-
-| Option | What You Lose |
+| Sizing | Cost |
 |---|---|
-| **Overprovision** — set requests to burst peak | 80–90 % of CPU allocation sits idle at steady state; inflates cluster cost and degrades bin-packing |
-| **Underprovision** — set requests to steady state | JVM startup is throttled, pod takes 2–5× longer to become ready; SLO violations during rollouts and restarts |
-| **Startup hooks / pre-warm** | Application-layer complexity; doesn't change how the scheduler sees the pod |
-| **HPA scale-up pre-warm** | Doesn't help a single new replica; adds latency |
+| For the peak | The scheduler reserves CPU that the Pod no longer uses once it is warm. |
+| For the steady state | Startup is throttled by the CFS quota and takes longer. |
 
-### The In-Place Resize Solution
+In-Place Pod Resize (stable since Kubernetes v1.35) removes the choice: the Pod starts with the peak allocation and gives it back later, without a container restart. The kubelet rewrites the container's cgroup limits in place.
 
-Kubernetes In-Place Pod Resize lets you change a running pod's `resources.requests` and `resources.limits` **without restarting the container**. The kubelet updates the cgroup limits on the running process.
+The open question is **when to shrink**. Shrinking before the runtime is warm is an **early shrink**: the Pod loses CPU while it still needs it. The four patterns in this lab differ mostly in how they decide, and the scenarios measure what that costs.
 
-The pattern:
-1. Pod starts with **burst resources** (e.g. `cpu: 1500m`)
-2. JVM warms up — JIT compiles hot paths, Spring context initialises
-3. Readiness probe passes — something detects the pod is Ready
-4. That "something" patches the pod spec via the `pods/resize` API subresource
-5. Kubelet adjusts cgroups **in-place** — no container restart
-6. Cluster gets back the excess CPU; JVM keeps running
+## 2. Requirements
 
----
-
-## 2. Prerequisites
-
-### Tools
-
-| Tool | Minimum Version | Installation |
-|---|---|---|
-| Docker | 27.x | `brew install --cask docker` (macOS) |
-| kind | 0.27.x | `brew install kind` |
-| kubectl | 1.35 | `brew install kubectl` |
-| helm | 3.17 | `brew install helm` |
-
-> **macOS without Docker Desktop**: [Colima](https://github.com/abiosoft/colima) is a lightweight alternative.
-> ```bash
-> brew install colima
-> colima start --cpu 4 --memory 8
-> ```
-> Then install Docker CLI: `brew install docker`
-
-### Hardware
-
-The demo cluster uses a single worker node. The Spring Petclinic app needs up to 1500m CPU and 512Mi memory during startup.
-
-| Resource | Minimum | Recommended |
-|---|---|---|
-| CPU cores | 4 | 6 |
-| RAM | 8 GB | 12 GB |
-| Disk | 5 GB free | 10 GB free |
-
----
-
-## 3. Application Image
-
-The demo uses [spring-petclinic-jdk25](https://github.com/graz-dev/spring-petclinic-jdk25) — Spring Boot 3 on JDK 25 with G1GC and Spring Boot Actuator health endpoints. The image is published publicly on GHCR:
-
-```
-ghcr.io/graz-dev/spring-petclinic-jdk25:latest
-```
-
-kind nodes have internet access, so the image is pulled automatically when you apply the manifests — no `docker build` or `kind load` step is needed. The first `kubectl apply` on a fresh cluster will take ~1–2 minutes while the image is pulled to the worker node.
-
----
-
-## 4. Create the Cluster
-
-```bash
-# 2-node kind cluster: InPlacePodVerticalScaling + Grafana auto-exposed
-./scripts/setup-cluster.sh
-
-# Include VPA components:
-./scripts/setup-cluster.sh --with-vpa
-
-# Include Grafana + Prometheus (recommended for live demos):
-./scripts/setup-cluster.sh --with-monitoring
-
-# All together:
-./scripts/setup-cluster.sh --with-vpa --with-monitoring
-```
-
-After setup, the cluster looks like:
-
-```
-kind cluster: cpu-burst-lab  (Kubernetes v1.35.1)
-├── control-plane  (kube-system + monitoring namespace)
-│   └── port 30300 → localhost:3000  (Grafana, no port-forward needed)
-└── worker         (labelled demo/role=worker)
-                   └── cpu-burst-demo namespace (demo pods)
-```
-
-> **Namespace isolation**: `monitoring` is independent of `cpu-burst-demo`. Deleting the demo namespace between implementation runs leaves Grafana, Prometheus, and all their data untouched — the dashboard stays live throughout the session.
-
-### Verify
-
-```bash
-kubectl get nodes
-# NAME                          STATUS   ROLES           AGE
-# cpu-burst-lab-control-plane   Ready    control-plane   2m
-# cpu-burst-lab-worker          Ready    <none>          2m
-
-kubectl get nodes cpu-burst-lab-worker --show-labels | grep demo/role
-# demo/role=worker
-```
-
-### Grafana
-
-If you used `--with-monitoring`, Grafana is immediately available at **http://localhost:3000** (admin / admin) — no port-forward required. The "CPU Burst Lab — Startup Resize" dashboard is pre-provisioned and auto-refreshes every 5 seconds.
-
-The NodePort mapping works because `kind-config.yaml` binds `containerPort 30300` on the control-plane node to `hostPort 3000` on your machine. kube-proxy routes traffic from any node's port 30300 to the Grafana pod, wherever it is scheduled.
-
----
-
-## 5. Implementation 1 — Sidecar
-
-### What it does
-
-A lightweight sidecar container (`startup-resizer`) runs inside the same pod as the application. It polls the Kubernetes API for the Ready condition on the app container, and once the condition is `true`, submits an in-place resize patch via the `pods/resize` subresource.
-
-### Apply
-
-```bash
-kubectl apply -k implementation-sidecar/
-```
-
-### Expected terminal output
-
-```bash
-kubectl logs -n cpu-burst-demo \
-  -l app.kubernetes.io/name=petclinic \
-  -c startup-resizer -f
-```
-
-```
-[resizer] Sidecar started for pod petclinic-xxx-yyy in ns cpu-burst-demo
-[resizer] Will downscale 'petclinic' to cpu=300m, memory=512Mi
-[resizer] Polling kubectl for pod Ready condition every 5s...
-[resizer] Not ready yet (0s elapsed). Retrying in 5s...
-[resizer] Not ready yet (5s elapsed). Retrying in 5s...
-...                                          ← ~60–90 s of JVM warmup
-[resizer] Container 'petclinic' is Ready. Initiating in-place downscale...
-pod/petclinic-xxx-yyy patched
-[resizer] ✅  Resize patch accepted.
-[resizer] Waiting for kubelet to apply the resize...
-[resizer] resize= allocatedCPU=300m
-[resizer] ✅  In-place downscale complete. Pod cpu is now 300m.
-[resizer] Sidecar work done — entering idle mode.
-```
-
-### Confirm the resize (no restart)
-
-```bash
-POD=$(kubectl get pod -n cpu-burst-demo -l app.kubernetes.io/name=petclinic -o name | head -1)
-
-kubectl get $POD -n cpu-burst-demo \
-  -o jsonpath='spec_cpu={.spec.containers[0].resources.requests.cpu}  allocated_cpu={.status.containerStatuses[0].allocatedResources.cpu}  restarts={.status.containerStatuses[0].restartCount}{"\n"}'
-
-# Expected:
-# spec_cpu=300m  allocated_cpu=300m  restarts=0
-```
-
-### What success looks like
-
-| Field | Before resize | After resize |
-|---|---|---|
-| `spec.containers[0].resources.requests.cpu` | `1500m` | `300m` |
-| `status.containerStatuses[0].allocatedResources.cpu` | `1500m` | `300m` |
-| `status.resize` | (empty) | (empty — means complete) |
-| `status.containerStatuses[0].restartCount` | `0` | `0` |
-
----
-
-## 6. Implementation 2 — Deployment
-
-### What it does
-
-A separate controller `Deployment` runs `bitnami/kubectl` and executes a polling loop every 10 seconds. It lists all pods labelled `startup-boost=enabled`, checks each one's Ready condition, and for any pod that is Ready but not yet annotated as resized, submits the in-place resize patch and adds `startup-boost.io/resized=true` to the pod's annotations.
-
-### Apply
-
-```bash
-# Clean up any previous implementation first
-kubectl delete namespace cpu-burst-demo --ignore-not-found
-
-kubectl apply -k implementation-deployment/
-```
-
-### Watch the controller
-
-```bash
-kubectl logs -n cpu-burst-demo \
-  -l app.kubernetes.io/name=startup-boost-controller -f
-```
-
-```
-[controller] Controller started. Polling every 10s.
-[controller] Target: pods{startup-boost=enabled} in ns cpu-burst-demo
-[controller] Steady-state: cpu=300m memory=512Mi
-[controller] petclinic-xxx-yyy: resize in progress (), skipping.    ← first polls while app starts
-...
-[controller] petclinic-xxx-yyy: Ready=True, not yet resized. Triggering downscale...
-pod/petclinic-xxx-yyy patched
-[controller] petclinic-xxx-yyy: resize patch accepted.
-pod/petclinic-xxx-yyy annotated
-[controller] petclinic-xxx-yyy: annotated. Will run at 300m CPU.
-```
-
-### Confirm the annotation (Shrinkage Trap guard)
-
-```bash
-kubectl get pod -n cpu-burst-demo -l app.kubernetes.io/name=petclinic \
-  -o jsonpath='{.items[0].metadata.annotations}' | python3 -m json.tool
-
-# Expected annotations:
-# {
-#   "startup-boost.io/resized": "true",
-#   "startup-boost.io/resized-at": "2026-05-05T07:30:00Z",
-#   "startup-boost.io/steady-cpu": "300m"
-# }
-```
-
-### What success looks like
-
-Same fields as the sidecar table above, plus:
-
-| Annotation | Value |
+| Item | Value |
 |---|---|
-| `startup-boost.io/resized` | `true` |
-| `startup-boost.io/resized-at` | ISO-8601 timestamp |
-| `startup-boost.io/steady-cpu` | `300m` |
+| kind | v0.33.0 or later |
+| Node image | `kindest/node:v1.37.0` (pinned by digest in `kind-config.yaml`) |
+| Cluster | 1 control plane and 1 worker labeled `demo/role=worker` |
+| kubectl | v1.32 or later (`--subresource=resize`) |
+| helm | v3 |
+| jq | any recent version (`lab.sh` builds its results with it) |
+| cgroups | v2 on the container host: the scenarios read `cpu.max` and `cpu.stat` |
+| Host size | At least 4 CPUs and 8 GiB for the container host |
 
----
+On macOS with Colima: `colima start --cpu 6 --memory 10`. Docker Desktop with equivalent resources works, and so does a Linux host.
 
-## 7. Implementation 3 — VPA
+In-Place Pod Resize is stable since v1.35 and its feature gate is locked on, so `kind-config.yaml` sets no feature gates.
 
-### What it does
+`lab.sh` checks these before it does anything and exits non-zero with a message when one fails: missing tools, kubectl too old, cgroup v1, a host or worker that is too small, a missing cluster.
 
-The Vertical Pod Autoscaler adds three components to the cluster: a Recommender (observes metrics, produces resource recommendations), an Updater (applies recommendations either in-place or via eviction), and an Admission Controller (rewrites pod resources on creation).
-
-With `updateMode: InPlaceOrRecreate`, the Updater first attempts an in-place resize via the `pods/resize` subresource. It only falls back to eviction if in-place is not possible (e.g. a memory change with `restartPolicy: RestartContainer`).
-
-### Prerequisites
-
-VPA must be installed before applying the manifests. If you ran `setup-cluster.sh --with-vpa`, skip this step.
-
-```bash
-bash implementation-vpa/install-vpa.sh
-```
-
-### Apply
-
-The install is split into two steps to prevent the VPA admission controller from overriding the pod's burst CPU at creation time.
-
-**Step 1 — Create the namespace and the petclinic Deployment** (pod starts at 1500m burst):
-
-```bash
-# Clean up any previous implementation first
-kubectl delete namespace cpu-burst-demo --ignore-not-found
-
-kubectl apply -k implementation-vpa/
-```
-
-**Step 2 — Apply the VPA object** after the pod is Ready (JIT warmup has completed):
-
-```bash
-kubectl wait pod -n cpu-burst-demo \
-  -l app.kubernetes.io/name=petclinic \
-  --for=condition=Ready --timeout=300s
-
-kubectl apply -f implementation-vpa/vpa.yaml
-```
-
-> **Why two steps?** If the VPA object is created before the pod, the VPA admission controller intercepts pod creation and applies its cached recommendation (e.g. 200m), bypassing the burst phase entirely. Applying the VPA after the pod is Ready lets the JVM complete JIT warmup at full burst CPU, then VPA observes the dropping steady-state usage and resizes in-place.
-
-### Watch the VPA recommendation develop
-
-```bash
-# VPA needs a few minutes of metrics history on a fresh cluster.
-# If VPA has seen petclinic before (e.g. from a previous run), it
-# uses checkpointed history and may have a recommendation immediately.
-kubectl get vpa petclinic-vpa -n cpu-burst-demo \
-  -o jsonpath='{.status.recommendation}' | python3 -m json.tool
-```
-
-```json
-{
-  "containerRecommendations": [
-    {
-      "containerName": "petclinic",
-      "lowerBound":     { "cpu": "200m", "memory": "256Mi" },
-      "target":         { "cpu": "200m", "memory": "256Mi" },
-      "uncappedTarget": { "cpu": "15m",  "memory": "100Mi" },
-      "upperBound":     { "cpu": "200m", "memory": "256Mi" }
-    }
-  ]
-}
-```
-
-> `uncappedTarget` reflects actual observed usage. `target` is clamped to `minAllowed` (200m CPU, 256Mi memory).
-
-### Watch the in-place resize event
-
-```bash
-kubectl get events -n cpu-burst-demo --sort-by='.lastTimestamp'
-```
+## 3. Repository layout
 
 ```
-ResizeStarted        pod/petclinic-xxx  Pod resize started: ...cpu:200m...
-InPlaceResizedByVPA  pod/petclinic-xxx  Pod was resized in place by VPA Updater.
-ResizeCompleted      pod/petclinic-xxx  Pod resize completed: ...cpu:200m...
+lab.sh                     entry point for every command
+Makefile                   thin targets that call lab.sh
+kind-config.yaml           cluster definition
+scripts/
+  setup-cluster.sh         kind cluster, metrics-server, optional VPA and monitoring
+  install-monitoring.sh    kube-prometheus-stack and the Grafana dashboard
+  teardown-cluster.sh
+  lib/                     shell helpers (resize.sh is shared with the in-cluster scripts)
+  scenarios/               one file per lab.sh scenario
+monitoring/dashboard.json  the Grafana dashboard
+base/                      the petclinic Deployment and Service that every overlay builds on
+implementation-sidecar/    pattern 1
+implementation-controller/ pattern 2
+implementation-operator/   pattern 3 (Go operator and the StartupBoostPolicy CRD)
+implementation-vpa/        pattern 4
+scenarios/                 compare, jvm-cpus, manual-resize, stabilization, load (k6)
+results/                   measurements (gitignored)
 ```
 
-The `InPlaceResizedByVPA` event confirms the Updater used the `pods/resize` subresource rather than evicting and recreating the pod.
+### The app
 
-### What success looks like
+`ghcr.io/graz-dev/spring-petclinic-jdk25:0.2.0` is Spring Boot on `eclipse-temurin:25-jre`, so `sh` and `cat` exist in the container. It bundles an OpenTelemetry Java agent, which the lab disables with `OTEL_SDK_DISABLED=true`.
 
-| Field | After VPA resize |
+`base/deployment.yaml` is the single definition of the workload:
+
+- CPU request and limit 1500m, memory request 512Mi and limit 1Gi. Memory requests below limits keep the Pod Burstable, so the CPU request can equal the CPU limit without changing the QoS class.
+- `resizePolicy`: CPU `NotRequired` (resize in place), memory `RestartContainer`.
+- Startup, readiness and liveness probes on the Actuator endpoints.
+- Every pattern and scenario is a kustomize overlay of this base.
+
+### Images and namespaces
+
+Every image is pinned by version: the app, the operator (`sha-84e5843`), `alpine/k8s:1.37.1` for the sidecar and the controller (it has `kubectl` and `/bin/sh`, for amd64 and arm64) and `grafana/k6:1.8.2`. No image uses a floating tag.
+
+| Namespace | Used by |
 |---|---|
-| `spec.containers[0].resources.requests.cpu` | `200m` (VPA recommendation) |
-| `spec.containers[0].resources.limits.cpu` | `200m` |
-| `spec.containers[0].resources.requests.memory` | `256Mi` |
-| `spec.containers[0].resources.limits.memory` | `512Mi` (unchanged — QoS guard) |
-| `status.containerStatuses[0].restartCount` | `0` |
-| Event | `InPlaceResizedByVPA` |
+| `cpu-burst-demo` | the four patterns |
+| `cpu-burst-compare` | `compare` |
+| `cpu-burst-manual` | `manual-resize` |
+| `cpu-burst-stabilization` | `stabilization` |
+| `cpu-burst-jvm` | `jvm-cpus` |
+| `cpu-burst-operator` | the operator (installed on demand, kept by `reset`) |
 
-> **Why did memory limits stay at 512Mi?** If VPA set `memory limits = memory requests = 256Mi`, both CPU and memory would be `requests == limits`, flipping the pod's QoS class from **Burstable** to **Guaranteed**. Kubernetes rejects any resize that changes QoS class. VPA is aware of this and only adjusts the memory request, leaving the limit intact.
+Everything the lab creates is labeled `app.kubernetes.io/part-of: cpu-burst-lab` and `lab.scenario: <name>`.
 
----
-
-## 8. Implementation 4 — Operator
-
-### What it does
-
-This implementation builds a purpose-built Kubernetes controller written in Go using [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) (the same framework that backs kubebuilder and Operator SDK). It extends the Kubernetes API with a `StartupBoostPolicy` custom resource.
-
-The key difference from all previous implementations: it is **event-driven, not polling-based**. The controller registers a `Watches` hook on pod events. When any pod in the namespace transitions to Ready, `mapPodToPolicy` translates the pod event into a reconcile request for the matching policy. The resize fires within milliseconds — no 5-second or 10-second lag.
-
-| Property | Deployment controller (impl 2) | Operator (impl 4) |
-|---|---|---|
-| Loop type | Poll every 10s | Event-driven (pod watch) |
-| Resize lag | Up to 10s | < 1s |
-| User-facing API | Pod annotation | `StartupBoostPolicy` CRD |
-| Lifecycle visibility | Pod annotation only | `kubectl get sbp` shows per-pod phase |
-| Language | Bash + kubectl | Go + controller-runtime |
-
-### Prerequisites
-
-- The kind cluster must be running
-- `docker` is only needed for the local build fallback (`make deploy-local`) — the primary path pulls the image from GHCR automatically
-
-### The CRD — `StartupBoostPolicy`
-
-This implementation registers a new Kubernetes resource kind in the cluster:
+## 4. Bring the lab up
 
 ```bash
-kubectl get crd startupboostpolicies.startup.boost.io
-# NAME                                       CREATED AT
-# startupboostpolicies.startup.boost.io      2026-05-05T10:...
+./lab.sh up
 ```
 
-Short name `sbp`. The policy object you apply per workload looks like this:
+This runs `scripts/setup-cluster.sh --with-vpa --with-monitoring`, then preloads every image into the kind nodes so the scenarios work with no network. The preload saves one platform with `docker save --platform` and loads the archive, because `kind load docker-image` fails on multi-platform images with Docker's containerd image store.
 
-```yaml
-apiVersion: startup.boost.io/v1alpha1
-kind: StartupBoostPolicy
-metadata:
-  name: petclinic-boost
-  namespace: cpu-burst-demo
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: petclinic   # which pods to manage
-  containers:
-    - name: petclinic
-      steadyCPU: "300m"                   # target CPU after startup burst
-  stabilizationSeconds: 0                 # wait N seconds after Ready before resizing
-```
+Grafana is at http://localhost:3000 (`admin` / `admin`). If port 3000 is taken on the host, set `GRAFANA_HOST_PORT=3001` before `./lab.sh up`.
 
-The controller watches for pods matching `selector` in the same namespace. As soon as a pod's `Ready` condition becomes `True`, the controller patches it via `pods/resize` to `steadyCPU` and writes the result back to the policy's `.status.boostedPods`.
-
-### Apply
-
-The operator image is published to GHCR by CI — no local Docker build needed.
-
-The install is split into two distinct steps, which mirrors how real operators are used in practice:
-
-**Step 1 — Install the operator** (CRD + RBAC + controller + app deployment):
+Other lifecycle commands:
 
 ```bash
-# Clean up any previous implementation first
-kubectl delete namespace cpu-burst-demo --ignore-not-found
-
-kubectl apply --server-side -k implementation-operator/
+./lab.sh reset   # delete every lab namespace, keep the cluster and monitoring
+./lab.sh down    # delete the cluster
 ```
 
-Server-side apply handles the CRD + other resources in a single command without a race condition because the `StartupBoostPolicy` CR instance is not bundled into the kustomization — only the CRD schema itself is. The controller starts up and waits for its informer cache to sync.
+Every scenario starts by deleting and recreating its own namespace, so running it twice in a row needs no `reset`. A scenario never touches `monitoring`, `kube-system` or another scenario's namespace.
 
-**Step 2 — Create a `StartupBoostPolicy`** (this is what an app team would do):
+## 5. How a resize is detected
+
+A resize patch is accepted immediately. The kubelet applies it afterwards, and it can take a moment (or be deferred). Since v1.33 the status of that work is in two Pod conditions, not in `.status.resize`, which no longer exists:
+
+- `PodResizePending`, with reason `Infeasible` or `Deferred`
+- `PodResizeInProgress`
+
+A resize is **done** when neither condition is present **and** `status.containerStatuses[name==X].resources` equals the resources in the Pod spec. The second half matters: the `resources` field in the container status is what the kubelet actually configured.
+
+`scripts/lib/resize.sh` implements this once, in POSIX `sh`: `resize_patch`, `resize_snapshot`, `resize_is_done` and `resize_wait`. The host scripts source it, and the sidecar and the controller mount it from a ConfigMap generated from the same file. All of them select the container by name, never by index.
+
+## 6. The four patterns
+
+| | Sidecar | Controller | Operator | VPA |
+|---|---|---|---|---|
+| Reacts to | Polling from inside the Pod (2 s) | Polling, one controller per namespace (5 s) | Pod watch events | Usage history |
+| Shrinks at | Ready | Ready plus up to one poll | Ready plus `stabilizationSeconds` | When the recommendation excludes the current request |
+| Add a workload | A sidecar in the Pod template | A label | A `StartupBoostPolicy` | A `VerticalPodAutoscaler` |
+| `pods/resize` rights | Every Pod's ServiceAccount | One controller | One operator | The VPA updater |
+| Early-shrink risk | High | Medium | Low, tunable | Not startup-aware |
+
+The operator is the only pattern with a configurable delay. Each folder has a short README: [sidecar](implementation-sidecar/README.md), [controller](implementation-controller/README.md), [operator](implementation-operator/README.md), [vpa](implementation-vpa/README.md).
+
+Run any of them end to end with `./lab.sh sidecar|controller|operator|vpa`. Each one applies the pattern, streams the log of whatever does the resizing, shows the resize land, and prints the Pod's `status.containerStatuses[].resources`, `restartCount` and `cpu.max`.
+
+For `operator` it also prints `kubectl get sbp -o wide` and the per-Pod status phases (`Burst`, `Ready`, `Steady`). For `vpa` it adds a second step: it triggers `kubectl rollout restart` and records the new Pod's initial CPU request, to test the hypothesis that once VPA has a recommendation, new Pods start at the steady CPU and the boost is gone. The result is in `rollout.initial_cpu_request` and `rollout.boost_kept`.
+
+## 7. Scenarios
+
+Every scenario narrates its steps (`==> Step 2/4: ...`). With `PAUSE=1` it waits for Enter before each step, for a live demo. Without it, it runs straight through. It records RFC 3339 timestamps of the scenario and of its key events (Pod created, Ready, resize requested, resize done) so screenshots can target exact time windows, and it never waits with a fixed sleep: it polls a condition with a timeout.
+
+### compare
 
 ```bash
-kubectl apply -f implementation-operator/config/samples/startupboostpolicy.yaml
+./lab.sh compare              # one Deployment at a time
+./lab.sh compare --parallel   # all three at once
 ```
 
-This creates the `petclinic-boost` policy that tells the operator to resize pods matching `app.kubernetes.io/name=petclinic` down to `300m` CPU once they become Ready.
+Three Deployments of the same app in `cpu-burst-compare`:
 
-> This separation reflects real operator usage: a platform team installs the operator once (step 1); application teams create policy objects for their workloads (step 2). Bundling the CR instance into the operator installation would couple infrastructure to application configuration.
+- `petclinic-steady`: 300m request and limit, no resize
+- `petclinic-peak`: 1500m request and limit, no resize
+- `petclinic-boost`: starts at 1500m, shrunk to 300m by the operator with `stabilizationSeconds: 30`
 
-> **First time / no GHCR image yet?** If you have not pushed the repo yet (so the CI workflow has not published the image), use the local build path instead:
-> ```bash
-> cd implementation-operator && make deploy-local
-> kubectl apply -f config/samples/startupboostpolicy.yaml
-> ```
-> This builds the image with Docker, loads it into kind, and patches `imagePullPolicy: Never` automatically.
+By default each one is Ready and settled (CPU below 100m for two samples) before the next starts, so they do not compete for host CPU. For each it records the time to Ready, Spring's own startup time from the `Started PetClinicApplication in X seconds` log line, `nr_throttled` and `throttled_usec` from `cpu.stat` at Ready, and the CPU request after a 180 second hold.
 
-### Verify the operator is running
+### manual-resize
 
 ```bash
-# CRD is registered
-kubectl get crd startupboostpolicies.startup.boost.io
-
-# Operator pod is up
-kubectl get pods -n cpu-burst-demo -l app.kubernetes.io/name=startup-boost-operator
-
-# Policy instance is active (after step 2)
-kubectl get sbp -n cpu-burst-demo
-# NAME              SELECTOR                                  STEADYCPU   AGE
-# petclinic-boost   {"app.kubernetes.io/name":"petclinic"}    300m        5s
+./lab.sh manual-resize
 ```
 
-### Watch the operator logs
+One Pod at 1500m. It prints `cpu.max` and the container status resources, patches the Pod to 300m with `--subresource resize`, polls the conditions until the resize is done, then prints both again with `restartCount`. Everything shown is read from the live Pod; nothing is hardcoded.
+
+### stabilization
 
 ```bash
-kubectl logs -n cpu-burst-demo \
-  -l app.kubernetes.io/name=startup-boost-operator -f
+./lab.sh stabilization
+LOAD_VUS=10 ./lab.sh stabilization
 ```
 
-Expected output:
+The operator shrinks right at Ready (`stabilizationSeconds: 0`, run A), then 30 seconds after (run B). In both runs a k6 Job starts as soon as the Pod is Ready. It records the throttling ratio (`nr_throttled / nr_periods` from `cpu.stat`) and the k6 latency for the 2 minutes after the resize.
 
-```
-INFO  Starting EventSource  source="kind source: *v1alpha1.StartupBoostPolicy"
-INFO  Starting EventSource  source="kind source: *v1.Pod"
-INFO  Starting Controller
-INFO  Starting workers
-INFO  Pod is Ready — applying in-place resize  pod=petclinic-xxx-yyy
-INFO  Resize complete  pod=petclinic-xxx-yyy  steadyCPU=300m
-```
+Both runs use the same Grafana window, anchored on the resize: 60 seconds before to 120 seconds after, written to `runs.<run>.window` in the results, so two screenshots sit side by side on the same time scale.
 
-### Watch the CRD status
+### jvm-cpus
 
 ```bash
-# Per-pod phase — updates in real-time as the controller progresses
-kubectl get sbp petclinic-boost -n cpu-burst-demo -w
-
-# Detailed view with conditions and timestamps
-kubectl describe sbp petclinic-boost -n cpu-burst-demo
+./lab.sh jvm-cpus
 ```
 
-Expected `describe` status section:
+Two boost Deployments that differ only in `-XX:ActiveProcessorCount=1`. Both start at 1500m, where the JVM detects 2 CPUs, and the operator shrinks them to 300m after 30 seconds. The same k6 load then runs against each. The processor count each JVM detected comes from `-Xlog:gc+init=info` (the line `CPUs: N total, M available`; `-Xlog:os+container` prints it only at trace level). If the two variants do not differ, that is the result.
 
-```yaml
-Status:
-  Boosted Pods:
-    Name:        petclinic-xxx-yyy
-    Phase:       Steady
-    Resized At:  2026-05-05T10:47:44Z
-    Steady CPU:  300m
-  Conditions:
-    Type:    Ready
-    Status:  True
-    Reason:  Reconciled
-    Message: Managing 1 pod(s)
-```
-
-The pod goes through phases: `Burst` (starting up) → `Ready` (readiness probe passed, resize imminent) → `Steady` (resize accepted by kubelet).
-
-### Confirm the resize (no restart)
+### watch and results
 
 ```bash
-POD=$(kubectl get pod -n cpu-burst-demo -l app.kubernetes.io/name=petclinic -o name | head -1)
-
-kubectl get $POD -n cpu-burst-demo \
-  -o jsonpath='spec_cpu={.spec.containers[0].resources.requests.cpu}  allocated_cpu={.status.containerStatuses[0].allocatedResources.cpu}  restarts={.status.containerStatuses[0].restartCount}{"\n"}'
-
-# Expected:
-# spec_cpu=300m  allocated_cpu=300m  restarts=0
+./lab.sh watch [namespace]   # refreshing table, one row per Pod
+./lab.sh results             # terminal UI over results/ (j/k run, J/K scroll, t raw JSON, q quit)
+./lab.sh results --md        # latest run of every scenario as markdown
 ```
 
-### What success looks like
+```
+POD                              PHASE    READY CPU SPEC CPU ACTUAL RESTARTS THROTTLED
+petclinic-boost-5b98fbf67b-pqsnq Running  true  300m     300m       0        75
+```
 
-| Field | Before resize | After resize |
-|---|---|---|
-| `spec.containers[0].resources.requests.cpu` | `1500m` | `300m` |
-| `status.containerStatuses[0].allocatedResources.cpu` | `1500m` | `300m` |
-| `metadata.annotations[startup.boost.io/resized]` | (absent) | `true` |
-| `status.containerStatuses[0].restartCount` | `0` | `0` |
-| `kubectl get sbp` Phase | `Burst` | `Steady` |
+`CPU ACTUAL` is `status.containerStatuses[].resources`, `THROTTLED` is `nr_throttled` from the container's `/sys/fs/cgroup/cpu.stat`.
 
-### Cleanup
+### Load generator
+
+`scenarios/load` is a k6 Job (`grafana/k6:1.8.2`) hitting the home page, the owner search and the vets page. `LOAD_VUS` (default 5) and `LOAD_DURATION` (seconds, default 120) set its size. The script prints one line per request, and `lab.sh` computes nearest-rank percentiles over an exact time window from those lines. k6's own whole-run summary is stored as well.
+
+## 8. Dashboard
+
+`monitoring/dashboard.json` is the single source for the Grafana dashboard **CPU Burst Lab**. It has two variables, `namespace` and `pod` (a regex, default `petclinic.*`), and three panels:
+
+- CPU used, request and limit per Pod, in millicores
+- Throttling ratio per Pod: `rate(container_cpu_cfs_throttled_periods_total[1m]) / rate(container_cpu_cfs_periods_total[1m])`
+- Container restarts
+
+`scripts/install-monitoring.sh` wraps the file in a ConfigMap labeled `grafana_dashboard=1`, which the Grafana sidecar imports. The cAdvisor metrics are scraped every 10 seconds, the default cAdvisor housekeeping interval.
+
+## 9. Results
+
+Each run writes `results/<scenario>-<YYYYmmdd-HHMMSS>.json` (raw, with `events` timestamps and the scenario's measurements) and appends a row to `results/<scenario>.md`. The folder is gitignored.
+
+`./lab.sh results` opens a terminal UI (`scripts/results-tui.py`, Python standard library only): runs on the left, grouped by scenario with the newest first, and a view of the selected run on the right, with tables and bars for the numbers and the timeline of events. Piped or redirected, it prints the latest run of every scenario as plain text.
+
+Timing values that come from Pod conditions have a resolution of one second. A value that was not measured is `TBD`; no number in this repository is estimated.
+
+## 10. Observability cheat sheet
 
 ```bash
-kubectl delete namespace cpu-burst-demo --ignore-not-found
-kubectl delete crd startupboostpolicies.startup.boost.io --ignore-not-found
+# Spec versus what the kubelet applied, for the app container
+kubectl get pod <pod> -n <ns> -o jsonpath='{.spec.containers[?(@.name=="petclinic")].resources}{"\n"}{.status.containerStatuses[?(@.name=="petclinic")].resources}{"\n"}'
+
+# Resize conditions (empty when no resize is in flight)
+kubectl get pod <pod> -n <ns> -o jsonpath='{.status.conditions[?(@.type=="PodResizePending")]}{.status.conditions[?(@.type=="PodResizeInProgress")]}{"\n"}'
+
+# The cgroup the kubelet configured, and the throttling counters
+kubectl exec -n <ns> <pod> -c petclinic -- cat /sys/fs/cgroup/cpu.max
+kubectl exec -n <ns> <pod> -c petclinic -- cat /sys/fs/cgroup/cpu.stat
+
+# QoS class (must stay Burstable)
+kubectl get pod <pod> -n <ns> -o jsonpath='{.status.qosClass}{"\n"}'
+
+# Operator
+kubectl get sbp -A -o wide
+kubectl logs -n cpu-burst-operator deploy/startup-boost-operator -f
 ```
 
----
-
-## 9. Switching Between Implementations
-
-Each implementation uses the same `cpu-burst-demo` namespace. Deleting it between runs gives a clean slate without touching anything outside it.
-
-```bash
-# Tear down the current implementation
-kubectl delete namespace cpu-burst-demo
-
-# Apply the next one
-kubectl apply -k implementation-sidecar/          # or deployment / vpa
-# For the operator (two steps):
-# kubectl apply --server-side -k implementation-operator/
-# kubectl apply -f implementation-operator/config/samples/startupboostpolicy.yaml
-```
-
-**What survives the namespace delete:**
-- `monitoring` namespace — Grafana, Prometheus, and their scraped data stay up
-- `kube-system` — VPA components (Recommender, Updater, Admission Controller) stay up
-- The Grafana dashboard at **http://localhost:3000** remains live and will immediately start showing data for the next implementation once its pod starts
-
-**What resets:**
-- `cpu-burst-demo` namespace and everything in it (pods, RBAC, ConfigMaps)
-- VPA `VPACheckpoint` objects in `cpu-burst-demo` (deleted with the namespace) — VPA re-learns from scratch for the next run, which avoids the "upperBound too high" issue
-
----
-
-## 10. Observability Cheat Sheet
-
-### Grafana dashboard
-
-Open **http://localhost:3000** (admin / admin) — available immediately after `./scripts/setup-cluster.sh --with-monitoring` with no port-forward.
-
-Dashboard: **CPU Burst Lab — Startup Resize**
-- Top panel: CPU usage (blue), requests (orange dashed), limits (red dashed) in millicores — auto-refreshes every 5s
-- Bottom row: current CPU requests, current CPU limits, container restart count (green = 0, red = any restart)
-
-The dramatic drop from 1500m to 300m (sidecar/operator) or 200m (VPA) is the centrepiece of the demo.
-
-### One-liner: current CPU allocation vs. spec
-
-```bash
-POD=$(kubectl get pod -n cpu-burst-demo -l app.kubernetes.io/name=petclinic -o name | head -1)
-
-kubectl get $POD -n cpu-burst-demo -o jsonpath='
-spec_cpu_req:    {.spec.containers[0].resources.requests.cpu}
-spec_cpu_lim:    {.spec.containers[0].resources.limits.cpu}
-allocated_cpu:   {.status.containerStatuses[0].allocatedResources.cpu}
-resize_status:   {.status.resize}
-restarts:        {.status.containerStatuses[0].restartCount}
-'
-```
-
-### Live CPU usage (requires metrics-server)
-
-```bash
-kubectl top pod -n cpu-burst-demo --containers
-```
-
-### Watch allocated resources change in real-time
-
-```bash
-watch -n 3 "kubectl get pod -n cpu-burst-demo \
-  -l app.kubernetes.io/name=petclinic \
-  -o jsonpath='{.items[0].status.containerStatuses[0].allocatedResources}'"
-```
-
-### Show pod QoS class
-
-```bash
-kubectl get pod -n cpu-burst-demo \
-  -l app.kubernetes.io/name=petclinic \
-  -o jsonpath='{.items[0].status.qosClass}'
-# Burstable
-```
-
----
+`cpu.max` has the form `$MAX $PERIOD`. The kubelet's default CFS period is 100 ms, so a 1500m limit reads `150000 100000` and a 300m limit reads `30000 100000`.
 
 ## 11. Troubleshooting
 
-### Pod stuck in `Pending` — `Insufficient cpu`
+### `kind create cluster` fails with "Too many open files" (Colima)
 
-The worker node has 4 CPUs. kube-system pods consume ~110m at idle, leaving ~3890m allocatable. The burst request is 1500m, which should fit comfortably. If you see scheduling failures:
-
-```bash
-kubectl describe pod -n cpu-burst-demo <pod-name> | grep -A5 Events
-```
-
-Check for lingering pods from a previous run still counted against quota:
+The VM's inotify limit is too low when other clusters run in it. Raise it inside the VM and retry:
 
 ```bash
-kubectl get pods -n cpu-burst-demo
-kubectl delete namespace cpu-burst-demo --force --grace-period=0
+colima ssh -- sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
 ```
+
+### Port 3000 is already allocated
+
+Another container or process holds the port. Use `GRAFANA_HOST_PORT=3001 ./lab.sh up`.
+
+### Pod stuck in `Pending` with `Insufficient cpu`
+
+The worker cannot fit the Pod at 1500m. Check `kubectl describe node -l demo/role=worker` for allocatable CPU. `compare --parallel` needs room for 1500m + 1500m + 300m on top of monitoring.
 
 ### `cannot patch resource "pods" ... may not change fields`
 
-You are hitting the Kubernetes immutability validation on the main pod endpoint. In K8s 1.35+, in-place resize **must** go through the `pods/resize` subresource. The fix is already in place in this repo — all `kubectl patch` calls use `--subresource=resize`.
+The patch went to the Pod endpoint instead of the subresource. Use `kubectl patch ... --subresource=resize`.
 
-If you see this error in your own scripts, verify:
-```bash
-kubectl patch pod <name> -n <ns> --subresource=resize --type=strategic -p '<json>'
-```
+### `cannot get resource "pods/resize"` (RBAC)
 
-### `cannot get resource "pods/resize"` (RBAC error)
+`kubectl patch --subresource=resize` does a GET and then a PATCH, so the Role needs `get` and `patch` on `pods/resize`. Check with `kubectl auth can-i patch pods/resize --as=system:serviceaccount:<ns>:<sa> -n <ns>`.
 
-`kubectl patch --subresource=resize` performs a GET before the PATCH. The ServiceAccount must have both `get` and `patch` on `pods/resize`. Check with:
+### `Pod QOS Class may not change as a result of resizing`
 
-```bash
-kubectl auth can-i get pods/resize -n cpu-burst-demo \
-  --as=system:serviceaccount:cpu-burst-demo:startup-resizer
-# yes
-```
+Changing every request and limit to equal values would flip Burstable to Guaranteed. The lab changes CPU only and keeps memory requests below limits.
 
-### Resize rejected: `Pod QOS Class may not change as a result of resizing`
+### VPA does not resize
 
-You attempted to resize CPU and memory simultaneously to equal values, which would flip QoS from Burstable to Guaranteed. Only resize CPU; leave memory as-is:
-
-```json
-{
-  "spec": {
-    "containers": [{
-      "name": "petclinic",
-      "resources": {
-        "requests": { "cpu": "300m" },
-        "limits":   { "cpu": "300m" }
-      }
-    }]
-  }
-}
-```
-
-### VPA not applying resize — updater logs "request within recommended range"
-
-This is the most common VPA issue in this demo. The updater only acts when the current CPU allocation falls **outside** `[lowerBound, upperBound]`. If a `VPACheckpoint` from a previous run captured the startup burst (1500m), the `upperBound` can be set above 1500m, causing the updater to see the pod as already adequately resourced.
+Look at the updater's decision and at the recommendation:
 
 ```bash
-# Check the updater's reasoning:
-kubectl logs -n kube-system -l app.kubernetes.io/instance=vpa \
-  -c updater --tail=20 | grep -i "not updating\|within recommended"
-
-# Check the current recommendation bounds:
-kubectl get vpa petclinic-vpa -n cpu-burst-demo \
-  -o jsonpath='upper={.status.recommendation.containerRecommendations[0].upperBound.cpu}{"\n"}'
+kubectl logs -n kube-system deploy/vpa-updater | grep cpu-burst-demo
+kubectl get vpa petclinic-vpa -n cpu-burst-demo -o jsonpath='{.status.recommendation}{"\n"}'
 ```
 
-If `upperBound` >= `1500m`, delete the checkpoint so the Recommender re-learns from current (low) usage:
+The Pod's request must fall outside the recommended `[lowerBound, upperBound]`. In this lab `maxAllowed` (1200m) sits below the 1500m boost for that reason. On a fresh cluster the recommender needs usage history before it produces a target.
+
+### Sidecar or controller in `CrashLoopBackOff` with `unknown command "sh"`
+
+The image has no shell. Use `alpine/k8s`, which has both `kubectl` and `sh`.
+
+## 12. API concepts
+
+### The `resize` subresource
+
+Resource changes on a running Pod go through `pods/<name>/resize`. A direct patch on the Pod is rejected for resource fields.
 
 ```bash
-kubectl delete vpacheckpoint -n cpu-burst-demo --all
-# Wait ~60–90s, then watch for the resize event:
-kubectl get events -n cpu-burst-demo --sort-by='.lastTimestamp' | grep -i resize
+kubectl patch pod <name> --subresource=resize --type=strategic -p '{"spec":{"containers":[{"name":"petclinic","resources":{"requests":{"cpu":"300m"},"limits":{"cpu":"300m"}}}]}}'
 ```
 
-### VPA Recommender has no recommendation yet
+### `resizePolicy`
 
-On a fresh cluster with no prior `VPACheckpoint`, wait 3–5 minutes after the pod becomes Ready before expecting a recommendation.
+`restartPolicy: NotRequired` tells the kubelet to change the cgroup without restarting the container. `RestartContainer` restarts it. CPU is `NotRequired` and memory is `RestartContainer` in the base.
 
-```bash
-kubectl get vpacheckpoint -n cpu-burst-demo
-kubectl describe vpa petclinic-vpa -n cpu-burst-demo | grep -A 20 "Recommendation:"
-```
+### QoS class
 
-### Sidecar in `CrashLoopBackOff` — `unknown command "sh" for "kubectl"`
+A resize cannot change a Pod's QoS class. The lab's Pods are Burstable (memory request 512Mi, limit 1Gi), and a CPU-only resize keeps them so.
 
-The `bitnami/kubectl` image sets `ENTRYPOINT=["kubectl"]`. If you only specify `command: ["/bin/sh", "..."]`, the entrypoint still wraps it. The correct override is:
+### Desired, allocated and actual
 
-```yaml
-command: ["/bin/sh", "/scripts/resize.sh"]
-```
+`spec.containers[].resources` is the desired state. `status.containerStatuses[].allocatedResources` is what the kubelet accepted. `status.containerStatuses[].resources` is what is configured on the running container. The lab compares the first and the last.
 
-This sets both the entrypoint and the command, replacing the default `ENTRYPOINT=["kubectl"]`.
+### CFS bandwidth
 
----
-
-## 12. Key API Concepts
-
-### `pods/resize` subresource
-
-Kubernetes 1.35 introduced a **dedicated subresource** for in-place pod resize. Direct PATCH on the main pod endpoint is rejected for resource fields by the immutability validator, even with the feature gate enabled.
-
-```bash
-# Correct (K8s 1.35+):
-kubectl patch pod <name> --subresource=resize --type=strategic -p '...'
-
-# Wrong (always rejected for resource fields):
-kubectl patch pod <name> --type=strategic -p '...'
-```
-
-The RBAC for the subresource is separate from the main pod resource:
-
-```yaml
-rules:
-  - apiGroups: [""]
-    resources: ["pods/resize"]
-    verbs: ["get", "patch", "update"]   # get is required — kubectl does GET then PATCH
-```
-
-### `resizePolicy: restartPolicy: NotRequired`
-
-This field in the container spec tells the kubelet that changing this resource should **not** restart the container. Without it, any resource change triggers a container restart — which defeats the entire purpose.
-
-```yaml
-resizePolicy:
-  - resourceName: cpu
-    restartPolicy: NotRequired
-  - resourceName: memory
-    restartPolicy: NotRequired
-```
-
-### QoS class immutability during resize
-
-Kubernetes enforces that a resize cannot change the pod's QoS class:
-- **Guaranteed**: `requests == limits` for all resources across all containers
-- **Burstable**: at least one container has `requests < limits`
-- **BestEffort**: no `requests` or `limits` set
-
-Our pods start Burstable (`cpu 1500m req=lim`, `memory 512Mi req / 1Gi lim`). A CPU-only resize to `cpu 300m req=lim` keeps `memory requests < memory limits`, preserving Burstable QoS.
-
-### `status.resize` field
-
-The kubelet tracks the resize lifecycle in `pod.status.resize`:
-- **`InProgress`** — kubelet is applying the resize
-- **`Deferred`** — resize accepted but waiting for resources to be available
-- **`Infeasible`** — resize cannot be applied (e.g. requested more than node capacity)
-- **(empty)** — no active resize; if the spec matches allocatedResources, the resize is complete
-
----
+A limit becomes `cpu.max`. When a container uses its quota before the period ends, it is throttled until the next period. `cpu.stat` counts `nr_periods`, `nr_throttled` and `throttled_usec`, and the dashboard's throttling ratio is `nr_throttled / nr_periods` over a window.
 
 ## 13. Teardown
 
 ```bash
-# Remove the current demo namespace
-kubectl delete namespace cpu-burst-demo --ignore-not-found
-
-# Full teardown: cluster + local Docker image + Helm repos
-./scripts/teardown-cluster.sh
+./lab.sh reset   # delete the lab namespaces, keep the cluster
+./lab.sh down    # delete the cluster and the Helm repos added by setup
 ```
-
-The teardown script is safe to run even if the cluster doesn't exist — every step checks for the resource before attempting deletion.

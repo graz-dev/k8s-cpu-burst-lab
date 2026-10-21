@@ -1,0 +1,31 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: petclinic-vpa
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: petclinic
+
+  updatePolicy:
+    # Try an in-place resize first. Fall back to recreating the Pod only when
+    # the resize is Infeasible or Deferred for more than 5 minutes.
+    updateMode: InPlaceOrRecreate
+    minReplicas: 1
+
+  resourcePolicy:
+    containerPolicies:
+      - containerName: petclinic
+        # CPU only. A memory change would restart the container (resizePolicy
+        # RestartContainer).
+        controlledResources: ["cpu"]
+        controlledValues: RequestsAndLimits
+        # minAllowed is the steady CPU the lab expects the recommendation to
+        # settle on, because petclinic uses less than this once warm.
+        # maxAllowed sits below the boost request (1500m) so the boosted Pod
+        # falls outside the recommended range and the updater acts on it.
+        minAllowed:
+          cpu: 300m
+        maxAllowed:
+          cpu: 1200m

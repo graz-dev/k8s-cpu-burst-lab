@@ -1,0 +1,15 @@
+# One petclinic Pod at 1500m, resized by hand.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cpu-burst-manual
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cpu-burst-lab
+      lab.scenario: manual-resize
+    includeTemplates: true
