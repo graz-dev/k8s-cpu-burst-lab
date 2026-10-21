@@ -119,7 +119,6 @@ main() {
     jvm-cpus) run_jvm_cpus ;;
     watch) run_watch "$@" ;;
     results) cmd_results "$@" ;;
-    capture) "${REPO_ROOT}/capture/capture.sh" "$@" ;; # TEMP-CAPTURE
     help | -h | --help) usage ;;
     *)
       usage >&2

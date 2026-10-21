@@ -1,4 +1,3 @@
 .claude/
 results/
-# TEMP-CAPTURE
-capture/out/
+.DS_Store

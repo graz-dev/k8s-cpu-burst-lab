@@ -6,6 +6,3 @@ up down reset sidecar controller operator vpa compare manual-resize stabilizatio
 
 lint:
 	shellcheck lab.sh scripts/*.sh scripts/lib/*.sh scripts/scenarios/*.sh implementation-vpa/install-vpa.sh
-
-capture-%: # TEMP-CAPTURE
-	./lab.sh capture $*
